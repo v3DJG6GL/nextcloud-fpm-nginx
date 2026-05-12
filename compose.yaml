@@ -66,6 +66,13 @@ services:
       # mobile clients via WebSocket). Requires REDIS_HOST and a non-SQLite
       # database. Opt-in; off by default.
       NOTIFY_PUSH_ENABLE: "true"
+
+      # Host filesystem user mapping. Defaults to 33:33 (the upstream
+      # `www-data` uid). Set to your host user/group so bind-mounted dirs
+      # are writable without `chown -R 33:33 /your/path` on the host.
+      # PUID: "1000"
+      # PGID: "1000"
+      # UMASK: "022"
     secrets:
       - db_password
       - nc_admin_password

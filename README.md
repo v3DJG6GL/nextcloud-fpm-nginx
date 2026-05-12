@@ -156,6 +156,16 @@ Optional services:
 |---|---|---|
 | `NOTIFY_PUSH_ENABLE` | If truthy (`true`/`1`/`yes`/`on`), runs the [notify_push](https://github.com/nextcloud/notify_push) daemon as a supervisord program, exposed via `nginx /push/`. Requires `REDIS_HOST` and a non-SQLite database. | `false` |
 
+Host user mapping (LSIO-style):
+
+| Variable | Effect | Default |
+|---|---|---|
+| `PUID` | Reassigns the in-container `www-data` user to this uid. Recursive `chown` of `/var/www` runs only when the uid actually changes. | `33` |
+| `PGID` | Same for gid. | `33` |
+| `UMASK` | `umask` applied to the entrypoint and inherited by all child processes (php-fpm, nginx, notify_push). | (unchanged) |
+
+**Caveat for `PUID` changes:** the first run with a new `PUID` will chown the entire `/var/www` tree. On a multi-TB data volume this can take hours. Subsequent restarts with the same `PUID` skip the chown (we detect uid match and bypass).
+
 Unsetting an env var on the next container start cleanly removes the
 corresponding override (the hook script rebuilds all override files from
 scratch each start).
