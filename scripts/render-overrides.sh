@@ -110,4 +110,37 @@ EOF
         ;;
 esac
 
+# --- cron (optional) ---------------------------------------------------------
+# Runs Nextcloud's background jobs every 5 min inside the same container.
+# Alternative: a sidecar `cron` service in compose.yaml (commented in the
+# example) that runs the same `/cron.sh`. The two are mutually exclusive —
+# enabling both would just have cron fire twice.
+
+cron_conf=/etc/supervisor/conf.d/cron.conf
+case "${NEXTCLOUD_CRON_ENABLE:-false}" in
+    true|1|yes|on)
+        # Run as root because /cron.sh exec's `busybox crond -L /dev/stdout`,
+        # which fails to reopen /dev/stdout under setuid(www-data) due to FD
+        # owner mismatch. busybox crond reads /var/spool/cron/crontabs/www-data
+        # and switches to www-data internally for each job — same effective
+        # privilege drop, no permission error.
+        cat > "$cron_conf" <<'EOF'
+[program:cron]
+command=/cron.sh
+autostart=true
+autorestart=true
+priority=40
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stopsignal=TERM
+stopwaitsecs=10
+EOF
+        ;;
+    *)
+        rm -f "$cron_conf"
+        ;;
+esac
+
 exit 0

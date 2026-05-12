@@ -67,6 +67,10 @@ services:
       # database. Opt-in; off by default.
       NOTIFY_PUSH_ENABLE: "true"
 
+      # Run Nextcloud's background-job cron inside this container.
+      # Alternative: uncomment the `cron` sidecar service below.
+      NEXTCLOUD_CRON_ENABLE: "true"
+
       # Host filesystem user mapping. Defaults to 33:33 (the upstream
       # `www-data` uid). Set to your host user/group so bind-mounted dirs
       # are writable without `chown -R 33:33 /your/path` on the host.
@@ -86,13 +90,17 @@ services:
       - backend
       - proxy
 
-  # Cron sidecar — same image, runs Nextcloud's background jobs every 5 min.
-  cron:
-    <<: *app
-    depends_on: [app, db, redis]
-    entrypoint: []
-    command: ["/cron.sh"]
-    networks: [backend]
+  # Cron sidecar — alternative to NEXTCLOUD_CRON_ENABLE in the `app` service.
+  # Disabled by default because the env var inside `app` is simpler and avoids
+  # running a second container. Uncomment if you prefer fully decoupled cron
+  # lifecycle (e.g., for horizontal-scaled deployments) — and set
+  # NEXTCLOUD_CRON_ENABLE: "false" on `app` so cron doesn't run twice.
+  #cron:
+  #  <<: *app
+  #  depends_on: [app, db, redis]
+  #  entrypoint: []
+  #  command: ["/cron.sh"]
+  #  networks: [backend]
 
 secrets:
   db_password:

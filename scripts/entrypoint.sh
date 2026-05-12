@@ -9,6 +9,7 @@
 #        before-starting hooks, then execs php-fpm)
 #      - nginx
 #      - optional: notify_push (NOTIFY_PUSH_ENABLE=true)
+#      - optional: cron     (NEXTCLOUD_CRON_ENABLE=true)
 set -eu
 
 # --- Reassign www-data uid/gid ----------------------------------------------
