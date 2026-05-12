@@ -150,6 +150,12 @@ Nginx tweaks:
 | `NGINX_SERVER_NAME` | Replaces `server_name` in the server block | `_` (catch-all) |
 | `NGINX_HSTS` | Value of `Strict-Transport-Security` header (emitted only when set) | unset |
 
+Optional services:
+
+| Variable | Effect | Default |
+|---|---|---|
+| `NOTIFY_PUSH_ENABLE` | If truthy (`true`/`1`/`yes`/`on`), runs the [notify_push](https://github.com/nextcloud/notify_push) daemon as a supervisord program, exposed via `nginx /push/`. Requires `REDIS_HOST` and a non-SQLite database. | `false` |
+
 Unsetting an env var on the next container start cleanly removes the
 corresponding override (the hook script rebuilds all override files from
 scratch each start).
@@ -173,6 +179,66 @@ volumes:
 The Nextcloud `*.config.php` fragment pattern is the same one the upstream
 image uses for its seeded configs (`redis.config.php`, `apcu.config.php`,
 etc.) — Nextcloud merges all `*.config.php` files in the config dir on load.
+
+## notify_push (real-time client sync)
+
+[`notify_push`](https://github.com/nextcloud/notify_push) is an official
+Nextcloud companion daemon that pushes filesystem-change events to connected
+sync clients over WebSocket — eliminating the 30-second polling cycle and
+making desktop/mobile sync feel instant.
+
+### Enabling
+
+Set `NOTIFY_PUSH_ENABLE=true` in your compose env. On first start the wrapper:
+
+1. Installs the `notify_push` Nextcloud app from the app store (it's not
+   bundled in NC 33 — must come from `apps.nextcloud.com`).
+2. Starts the `notify_push` binary as a third supervisord program (running as
+   `www-data`, listening on `127.0.0.1:7867`).
+3. Registers the binary URL inside Nextcloud's config (`config:app:set
+   notify_push base_endpoint`).
+
+The nginx `/push/` location proxies WebSocket upgrades through to the binary,
+so clients connect to `https://cloud.example.com/push` — same hostname as the
+rest of Nextcloud.
+
+### Requirements
+
+- `REDIS_HOST` must be set. notify_push uses Redis as the message bus between
+  Nextcloud and the binary.
+- A non-SQLite database (Postgres or MariaDB/MySQL). SQLite is not supported
+  by notify_push.
+- Your reverse proxy must allow WebSocket upgrades for `/push/`. NPM's
+  "Websockets Support: ON" toggle handles this; for Traefik/Caddy, see their
+  WebSocket docs.
+
+### Verifying
+
+```bash
+docker exec -u www-data <container> php /var/www/html/occ notify_push:metrics
+# expect a JSON object with active_connection_count, total_connection_count, etc.
+```
+
+Check the binary directly (the 400 means it's responding — the test endpoints
+need valid signatures):
+
+```bash
+curl -si http://127.0.0.1:8088/push/test/cookie
+# HTTP/1.1 400 Bad Request   <-- this is correct; the binary is up
+```
+
+### Known issue: `notify_push:setup` self-test
+
+The wrapper first tries `occ notify_push:setup` (which runs a multi-step
+self-test). One of the checks ("can load mount info from database") is
+known to fail intermittently against fresh installs even when notify_push is
+fully functional. After 6 unsuccessful attempts the wrapper falls back to
+storing the `base_endpoint` config value directly — which is the actual
+side-effect setup is trying to produce. This is logged with
+`[notify-push-wrapper] base_endpoint stored as http://localhost:7867/push`.
+
+Re-running `occ notify_push:setup` manually later usually succeeds once the
+instance has been used (mount info gets populated by normal activity).
 
 ## Upgrade workflow
 

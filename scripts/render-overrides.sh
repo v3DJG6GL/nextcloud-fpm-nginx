@@ -84,4 +84,30 @@ add_header Strict-Transport-Security "${NGINX_HSTS}" always;
 EOF
 fi
 
+# --- notify_push (optional) --------------------------------------------------
+
+np_conf=/etc/supervisor/conf.d/notify-push.conf
+case "${NOTIFY_PUSH_ENABLE:-false}" in
+    true|1|yes|on)
+        cat > "$np_conf" <<'EOF'
+[program:notify-push]
+command=/usr/local/bin/notify-push-wrapper.sh
+user=www-data
+autostart=true
+autorestart=true
+startretries=999
+priority=30
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+stopsignal=TERM
+stopwaitsecs=10
+EOF
+        ;;
+    *)
+        rm -f "$np_conf"
+        ;;
+esac
+
 exit 0

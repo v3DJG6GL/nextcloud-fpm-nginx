@@ -61,6 +61,11 @@ services:
       # Pin the nginx host (defaults to catch-all `_`).
       NGINX_SERVER_NAME: cloud.example.com
       # NGINX_HSTS: "max-age=31536000; includeSubDomains"
+
+      # Enable the notify_push companion daemon (real-time sync for desktop/
+      # mobile clients via WebSocket). Requires REDIS_HOST and a non-SQLite
+      # database. Opt-in; off by default.
+      NOTIFY_PUSH_ENABLE: "true"
     secrets:
       - db_password
       - nc_admin_password

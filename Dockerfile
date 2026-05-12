@@ -14,10 +14,26 @@ RUN set -eux; \
     ln -sf /dev/stderr /var/log/nginx/error.log; \
     mkdir -p /etc/supervisor/conf.d /etc/nginx/conf.d /var/log/supervisor
 
-COPY nginx.conf                                /etc/nginx/nginx.conf
-COPY supervisord.conf                          /etc/supervisor/supervisord.conf
-COPY --chmod=0755 scripts/entrypoint.sh        /usr/local/bin/container-entrypoint.sh
-COPY --chmod=0755 scripts/render-overrides.sh  /usr/local/bin/render-overrides.sh
+# Install the Nextcloud notify_push binary (companion to the upstream
+# `notify_push` PHP app that ships in the official image). Disabled by default;
+# opt in via NOTIFY_PUSH_ENABLE=true env var (see scripts/render-overrides.sh).
+ARG NOTIFY_PUSH_VERSION=1.3.2
+RUN set -eux; \
+    case "$(uname -m)" in \
+        x86_64)  rust_arch=x86_64 ;; \
+        aarch64) rust_arch=aarch64 ;; \
+        *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/notify_push \
+        "https://github.com/nextcloud/notify_push/releases/download/v${NOTIFY_PUSH_VERSION}/notify_push-${rust_arch}-unknown-linux-musl"; \
+    chmod 0755 /usr/local/bin/notify_push; \
+    /usr/local/bin/notify_push --version
+
+COPY nginx.conf                                     /etc/nginx/nginx.conf
+COPY supervisord.conf                               /etc/supervisor/supervisord.conf
+COPY --chmod=0755 scripts/entrypoint.sh             /usr/local/bin/container-entrypoint.sh
+COPY --chmod=0755 scripts/render-overrides.sh       /usr/local/bin/render-overrides.sh
+COPY --chmod=0755 scripts/notify-push-wrapper.sh    /usr/local/bin/notify-push-wrapper.sh
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD curl -fsS http://127.0.0.1/status.php 2>/dev/null \
