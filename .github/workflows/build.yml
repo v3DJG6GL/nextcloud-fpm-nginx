@@ -11,10 +11,25 @@ on:
       - tests/**
       - .github/workflows/build.yml
       - .github/versions-blocklist.txt
+  pull_request:
+    paths:
+      - Dockerfile
+      - nginx.conf
+      - supervisord.conf
+      - scripts/**
+      - tests/**
+      - .github/workflows/build.yml
+      - .github/versions-blocklist.txt
   workflow_dispatch:
   schedule:
     # Daily 06:00 UTC — picks up new upstream Nextcloud patch releases.
     - cron: '0 6 * * *'
+
+# Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
+# in-flight publishes to ghcr.io).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -207,12 +222,42 @@ jobs:
           docker run --rm --entrypoint=php-fpm "$IMG" -t
           docker run --rm --entrypoint=/usr/local/bin/notify_push "$IMG" --version
 
+  # ─── Single umbrella check for branch-protection rulesets ───
+  # The matrix-job names contain the NC major (e.g. "Test (amd64) — 33 / …"),
+  # so they change every time upstream cuts a new major and aren't usable as
+  # stable required-status-check contexts. `all-ci` is the stable gate: it has
+  # no name suffix, succeeds iff every dependency succeeded, and is the only
+  # check the ruleset needs to reference.
+  all-ci:
+    name: all-ci
+    needs: [compute-matrix, test, test-arm64-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required jobs succeeded
+        run: |
+          set -euo pipefail
+          fail=0
+          for r in '${{ needs.compute-matrix.result }}' \
+                   '${{ needs.test.result }}' \
+                   '${{ needs.test-arm64-smoke.result }}'; do
+            [ "$r" = success ] || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::compute-matrix=${{ needs.compute-matrix.result }}, test=${{ needs.test.result }}, test-arm64-smoke=${{ needs.test-arm64-smoke.result }}"
+            exit 1
+          fi
+
   # ─── Build + push multi-arch (only after tests pass) ───
   # Reuses the buildx cache populated by the test jobs, so amd64+arm64 here
   # is mostly cache hits — only the final manifest push + provenance attest
   # is real work.
   build:
     name: Build & push — v${{ matrix.build.version }}
+    # Skip pushes on PRs — dependabot PRs are untrusted with packages: write,
+    # and we don't want PR builds clobbering published tags. The push runs on
+    # the merge commit (push to master) instead.
+    if: github.event_name != 'pull_request'
     needs: [compute-matrix, test, test-arm64-smoke]
     runs-on: ubuntu-latest
     strategy:
