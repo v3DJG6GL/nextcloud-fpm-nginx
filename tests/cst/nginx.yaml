@@ -1,0 +1,58 @@
+schemaVersion: 2.0.0
+
+# nginx config integrity, MIME types, key directives
+commandTests:
+  - name: nginx -t syntax check
+    command: nginx
+    args: ['-t']
+    exitCode: 0
+    expectedError:
+      - 'syntax is ok'
+      - 'test is successful'
+
+  - name: nginx -V shows http_ssl + http_v2 modules (upstream Debian build)
+    command: nginx
+    args: ['-V']
+    exitCode: 0
+
+  - name: nginx.conf includes upstream php-handler at 127.0.0.1:9000
+    command: grep
+    args: ['-E', '^\s*server 127\.0\.0\.1:9000;', '/etc/nginx/nginx.conf']
+    exitCode: 0
+
+  - name: nginx.conf trusts RFC1918 subnets via set_real_ip_from
+    command: sh
+    args:
+      - '-c'
+      - 'grep -cE "^\s*set_real_ip_from " /etc/nginx/nginx.conf'
+    exitCode: 0
+    expectedOutput: ['4']    # 10/8, 172.16/12, 192.168/16, fc00::/7
+
+  - name: nginx /push location proxies to 127.0.0.1:7867
+    command: grep
+    args: ['-E', 'proxy_pass http://127\.0\.0\.1:7867', '/etc/nginx/nginx.conf']
+    exitCode: 0
+
+  - name: nginx upstream NC reference security headers all declared
+    command: sh
+    args:
+      - '-c'
+      - |
+        for h in Referrer-Policy X-Content-Type-Options X-Frame-Options \
+                 X-Permitted-Cross-Domain-Policies X-Robots-Tag; do
+            grep -q "add_header $h" /etc/nginx/nginx.conf || { echo "missing: $h"; exit 1; }
+        done
+    exitCode: 0
+
+  - name: nginx forwarded_https map present (dynamic fastcgi HTTPS)
+    command: sh
+    args:
+      - '-c'
+      - 'grep -c forwarded_https /etc/nginx/nginx.conf'
+    exitCode: 0
+    excludedOutput: ['^0$']
+
+  - name: mime.types declares application/wasm
+    command: grep
+    args: ['application/wasm', '/etc/nginx/mime.types']
+    exitCode: 0

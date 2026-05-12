@@ -1,0 +1,68 @@
+# Test fixture: Postgres + Redis + nextcloud-fpm-nginx
+#
+# Used by tests/run-all.sh for SCENARIO_DB=postgres. Env vars passed in:
+#   NC_IMAGE                 — image-under-test
+#   SCENARIO_NOTIFY_PUSH     — true/false → NOTIFY_PUSH_ENABLE on nc
+#   SCENARIO_CRON            — incontainer/sidecar/none
+#   COMPOSE_PROFILES=cron-sidecar  (activated by run-all.sh if cron=sidecar)
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: pgpass
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U nextcloud']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  nc: &nc
+    image: ${NC_IMAGE:-local/nc-fpm-nginx:test}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: pgpass
+      REDIS_HOST: redis
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: changeme
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost
+      NOTIFY_PUSH_ENABLE: ${SCENARIO_NOTIFY_PUSH:-false}
+      NEXTCLOUD_CRON_ENABLE: ${NC_CRON_INCONTAINER:-false}
+    ports:
+      - '0:80'    # ephemeral host port; tests resolve via `docker compose port nc 80`
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - 'curl -fsS http://127.0.0.1/status.php | grep -q ''"installed":true'' || exit 1'
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # Cron sidecar — only runs when run-all.sh activates the profile.
+  nc-cron:
+    <<: *nc
+    profiles: [cron-sidecar]
+    entrypoint: []
+    command: ['/cron.sh']
+    healthcheck:
+      disable: true
+    depends_on:
+      nc: { condition: service_healthy }
+    ports: []

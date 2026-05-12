@@ -1,0 +1,62 @@
+schemaVersion: 2.0.0
+
+commandTests:
+  - name: php -v reports PHP 8.x
+    command: php
+    args: ['-v']
+    exitCode: 0
+    expectedOutput: ['PHP 8\.[0-9]+\.[0-9]+']
+
+  - name: php-fpm -t configuration is valid
+    command: php-fpm
+    args: ['-t']
+    exitCode: 0
+
+  - name: required Nextcloud PHP extensions all loaded
+    command: sh
+    args:
+      - '-c'
+      - |
+        required="bz2 ftp gd intl gmp bcmath imagick redis apcu opcache exif pcntl sysvsem zip igbinary memcached pdo_mysql pdo_pgsql ldap"
+        missing=""
+        for ext in $required; do
+            if ! php -m | grep -qiE "^${ext}$"; then
+                missing="$missing $ext"
+            fi
+        done
+        if [ -n "$missing" ]; then
+            echo "Missing PHP extensions:$missing"
+            php -m
+            exit 1
+        fi
+    exitCode: 0
+
+  - name: opcache.enable=1 baseline from upstream
+    command: php
+    args: ['-r', 'echo ini_get("opcache.enable") ?: 0;']
+    exitCode: 0
+    expectedOutput: ['^1$']
+
+  - name: opcache.jit baseline from upstream (1255)
+    command: php
+    args: ['-r', 'echo ini_get("opcache.jit");']
+    exitCode: 0
+    expectedOutput: ['1255']
+
+  - name: opcache.save_comments enabled (required by Nextcloud)
+    command: php
+    args: ['-r', 'echo ini_get("opcache.save_comments");']
+    exitCode: 0
+    expectedOutput: ['^1$']
+
+  - name: apc.enable_cli set by upstream (Nextcloud cron uses APCu)
+    command: php
+    args: ['-r', 'echo ini_get("apc.enable_cli") ?: 0;']
+    exitCode: 0
+    expectedOutput: ['^1$']
+
+  - name: igbinary serializer configured for sessions
+    command: php
+    args: ['-r', 'echo ini_get("session.serialize_handler");']
+    exitCode: 0
+    expectedOutput: ['igbinary']

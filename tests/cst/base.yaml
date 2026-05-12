@@ -1,0 +1,57 @@
+# container-structure-test: image-level invariants. No container boot.
+# Run via: container-structure-test test --image $IMAGE --config tests/cst/base.yaml
+schemaVersion: 2.0.0
+
+fileExistenceTests:
+  - name: container-entrypoint script present + executable
+    path: /usr/local/bin/container-entrypoint.sh
+    shouldExist: true
+    permissions: '-rwxr-xr-x'
+  - name: render-overrides script present + executable
+    path: /usr/local/bin/render-overrides.sh
+    shouldExist: true
+    permissions: '-rwxr-xr-x'
+  - name: notify-push-wrapper script present + executable
+    path: /usr/local/bin/notify-push-wrapper.sh
+    shouldExist: true
+    permissions: '-rwxr-xr-x'
+  - name: notify_push binary present + executable
+    path: /usr/local/bin/notify_push
+    shouldExist: true
+    permissions: '-rwxr-xr-x'
+  - name: nginx.conf present
+    path: /etc/nginx/nginx.conf
+    shouldExist: true
+  - name: supervisord.conf present
+    path: /etc/supervisor/supervisord.conf
+    shouldExist: true
+  - name: cron.sh shipped by upstream nextcloud:fpm
+    path: /cron.sh
+    shouldExist: true
+  - name: upstream entrypoint.sh present
+    path: /entrypoint.sh
+    shouldExist: true
+  - name: nginx conf.d directory present (for HSTS drop-in)
+    path: /etc/nginx/conf.d
+    shouldExist: true
+  - name: supervisor conf.d directory present (for optional programs)
+    path: /etc/supervisor/conf.d
+    shouldExist: true
+  - name: Nextcloud webroot exists
+    path: /var/www/html
+    shouldExist: true
+  - name: docker-entrypoint hook dirs exist (before-starting required)
+    path: /docker-entrypoint-hooks.d/before-starting
+    shouldExist: true
+  - name: no .git directory in image
+    path: /.git
+    shouldExist: false
+  - name: no SSH keys accidentally in image
+    path: /root/.ssh
+    shouldExist: false
+
+metadataTest:
+  cmd: ['/usr/local/bin/container-entrypoint.sh']
+  entrypoint: []
+  exposedPorts: ['80', '9000']    # 80 from us, 9000 from upstream
+  workdir: /var/www/html

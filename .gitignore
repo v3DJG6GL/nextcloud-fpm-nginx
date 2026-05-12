@@ -13,3 +13,6 @@ MIGRATION-FROM-LSIO.md
 compose-current-config.yaml
 *.kate-swp
 *.swp
+
+# Test suite artifacts
+tests/reports/
