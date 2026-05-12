@@ -1,0 +1,10 @@
+# One Nextcloud major per line to EXCLUDE from the build matrix.
+# Comments (lines starting with #) and blank lines are ignored.
+#
+# The build workflow fetches all currently-supported majors from upstream's
+# `nextcloud/docker` versions.json and builds every one not listed here.
+# When upstream releases a new major (e.g., 34), it will be built automatically
+# unless added here.
+#
+# Example: drop NC 32 once you've migrated all consumers off it.
+#32

@@ -1,0 +1,108 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - Dockerfile
+      - nginx.conf
+      - supervisord.conf
+      - hooks/**
+      - .github/workflows/build.yml
+      - .github/versions-blocklist.txt
+  workflow_dispatch:
+  schedule:
+    # Daily 06:00 UTC — picks up new upstream Nextcloud patch releases.
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  compute-matrix:
+    name: Compute build matrix from upstream versions.json
+    runs-on: ubuntu-latest
+    outputs:
+      builds: ${{ steps.set.outputs.builds }}
+      latest: ${{ steps.set.outputs.latest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          blocklist_file=.github/versions-blocklist.txt
+          if [ -f "$blocklist_file" ]; then
+            blocklist=$(grep -vE '^\s*(#|$)' "$blocklist_file" | tr '\n' ',' | sed 's/,$//')
+          else
+            blocklist=""
+          fi
+          echo "Blocklist: ${blocklist:-<none>}"
+
+          curl -fsSL https://raw.githubusercontent.com/nextcloud/docker/master/versions.json \
+            > versions.json
+
+          jq -c --arg block "$blocklist" '
+            ($block | split(",") | map(select(. != ""))) as $b
+            | [ to_entries[]
+                | select(.key as $k | $b | index($k) | not)
+                | { major: .key, version: .value.version } ]
+          ' versions.json > builds.json
+
+          echo "Builds:"
+          cat builds.json | jq
+
+          latest=$(jq -r 'map(.major | tonumber) | max' builds.json)
+          echo "Latest non-blocked major: $latest"
+
+          echo "builds=$(cat builds.json)" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: compute-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/nextcloud-fpm-nginx
+          tags: |
+            type=raw,value=v${{ matrix.build.version }}
+            type=raw,value=v${{ matrix.build.major }}.0
+            type=raw,value=v${{ matrix.build.major }}
+            type=raw,value=latest,enable=${{ matrix.build.major == needs.compute-matrix.outputs.latest }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          build-args: |
+            NC_VERSION=${{ matrix.build.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=nc-${{ matrix.build.major }}
+          cache-to: type=gha,scope=nc-${{ matrix.build.major }},mode=max
