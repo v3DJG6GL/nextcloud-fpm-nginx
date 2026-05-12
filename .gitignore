@@ -1,0 +1,15 @@
+# Local environment / runtime data
+.env
+secrets/
+data/
+*.log
+.DS_Store
+
+# Local-only notes — never push
+NOTES-LOCAL.md
+MIGRATION-FROM-LSIO.md
+
+# Reference / scratch files (your own deployments, snapshots, etc.)
+compose-current-config.yaml
+*.kate-swp
+*.swp
