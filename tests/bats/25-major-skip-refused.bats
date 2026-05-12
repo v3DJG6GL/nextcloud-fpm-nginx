@@ -1,0 +1,51 @@
+#!/usr/bin/env bats
+# 25-major-skip-refused.bats — Nextcloud refuses to skip major versions
+# (e.g., 31 → 33 without going through 32). We synthesize a fake old
+# version.php and verify the entrypoint refuses.
+
+load '../helpers/lib.bash'
+load '../helpers/docker.bash'
+
+CTN="nc-majorskip-test-$$"
+VOL="nc-majorskip-vol-$$"
+FIXDIR="$(pwd)/tests/fixtures"
+
+setup() {
+    # This test makes sense only against majors >= 33 (we synth a 31 marker)
+    case "${NC_MAJOR:-33}" in
+        32|33|34|35|36) ;;
+        *) skip "scenario NC_MAJOR=$NC_MAJOR doesn't make sense for the 31→ skip test" ;;
+    esac
+}
+
+teardown() {
+    container_rm "$CTN"
+    docker volume rm "$VOL" >/dev/null 2>&1 || true
+}
+
+@test "synthetic v31 version.php in /var/www/html causes current-major boot to refuse" {
+    # Create an empty volume, populate it with a v31 version.php at the root,
+    # then try to boot. NC has to think v31 is installed but the image is much newer.
+    docker volume create "$VOL" >/dev/null
+    docker run --rm -v "$VOL:/var/www/html" -v "$FIXDIR/version-31.php:/tmp/version.php:ro" \
+        alpine sh -c 'cp /tmp/version.php /var/www/html/version.php && chmod 644 /var/www/html/version.php' >/dev/null
+
+    # Start the container detached; wait up to 60s for it to exit on its own.
+    docker run -d --name "$CTN" \
+        -e SQLITE_DATABASE=nc.db \
+        -v "$VOL:/var/www/html" \
+        "$NC_IMAGE" >/dev/null 2>&1 || true
+
+    # Poll for the entrypoint refusal — looking for the upstream's specific message.
+    # We don't strictly require exit; the entrypoint may log + exit OR loop.
+    local deadline=$(( $(date +%s) + 60 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if docker logs "$CTN" 2>&1 | grep -qE 'Major Version is too low|too low to upgrade from|Updates between multiple major versions are unsupported|Can.t start Nextcloud'; then
+            break
+        fi
+        sleep 3
+    done
+
+    run docker logs "$CTN"
+    assert_match "$output" 'Major Version is too low|too low to upgrade from|Updates between multiple major versions are unsupported|Can.t start Nextcloud'
+}
