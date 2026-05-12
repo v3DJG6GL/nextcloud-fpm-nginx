@@ -39,8 +39,15 @@ services:
     profiles: [cron-sidecar]
     entrypoint: []
     command: ['/cron.sh']
+    # Trivial PID-1 liveness probe. `disable: true` makes `compose up --wait`
+    # fail with "no healthcheck configured" on compose v2.35+, so we give it
+    # a real (cheap) check instead of inheriting the parent's php-fpm probe.
     healthcheck:
-      disable: true
+      test: ['CMD-SHELL', 'kill -0 1']
+      interval: 10s
+      timeout: 2s
+      retries: 3
+      start_period: 5s
     depends_on:
       nc: { condition: service_healthy }
     ports: []
