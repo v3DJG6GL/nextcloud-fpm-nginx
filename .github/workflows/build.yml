@@ -39,7 +39,9 @@ jobs:
 
           blocklist_file=.github/versions-blocklist.txt
           if [ -f "$blocklist_file" ]; then
-            blocklist=$(grep -vE '^\s*(#|$)' "$blocklist_file" | tr '\n' ',' | sed 's/,$//')
+            # grep -v returns 1 when nothing matches (all-comment file); tolerate it.
+            blocklist=$(grep -vE '^\s*(#|$)' "$blocklist_file" || true)
+            blocklist=$(printf '%s' "$blocklist" | tr '\n' ',' | sed 's/,$//')
           else
             blocklist=""
           fi
