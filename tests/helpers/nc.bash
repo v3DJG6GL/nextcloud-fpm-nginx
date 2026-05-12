@@ -21,9 +21,9 @@ nc_versionstring() {
     nc_status_php 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("versionstring",""))'
 }
 
-# nc_config_system_get <key> → echoes the value (occ output without trailing newline).
+# nc_config_system_get <key> [array-index] → value (no trailing whitespace).
 nc_config_system_get() {
-    occ config:system:get "$1" 2>/dev/null | sed 's/[[:space:]]*$//'
+    occ config:system:get "$@" 2>/dev/null | sed 's/[[:space:]]*$//'
 }
 
 # nc_app_enabled <app-id> → exit 0 if the app is enabled

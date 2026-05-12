@@ -25,20 +25,24 @@ assert_eq() {
 
 assert_match() {
     local haystack="$1" pattern="$2" msg="${3:-pattern not found}"
-    if ! printf '%s' "$haystack" | grep -qE "$pattern"; then
+    # Strip CRs so HTTP header line endings don't break $-anchored patterns
+    # (POSIX ERE doesn't interpret \r as carriage return).
+    if ! printf '%s' "$haystack" | tr -d '\r' | grep -qE "$pattern"; then
         log "$msg"
         log "  pattern: $pattern"
-        log "  in:      $haystack"
+        log "  in (first 10 lines):"
+        printf '%s' "$haystack" | tr -d '\r' | head -10 | sed 's/^/#    /' >&3
         return 1
     fi
 }
 
 assert_not_match() {
     local haystack="$1" pattern="$2" msg="${3:-pattern found unexpectedly}"
-    if printf '%s' "$haystack" | grep -qE "$pattern"; then
+    if printf '%s' "$haystack" | tr -d '\r' | grep -qE "$pattern"; then
         log "$msg"
         log "  pattern: $pattern"
-        log "  in:      $haystack"
+        log "  in (first 10 lines):"
+        printf '%s' "$haystack" | tr -d '\r' | head -10 | sed 's/^/#    /' >&3
         return 1
     fi
 }
