@@ -11,9 +11,11 @@ VOL="nc-majorskip-vol-$$"
 FIXDIR="$(pwd)/tests/fixtures"
 
 setup() {
-    # This test makes sense only against majors >= 33 (we synth a 31 marker)
+    # This test makes sense only against majors >= 33 (we synth a 31 marker;
+    # 31→32 is a normal one-major upgrade, not a skip, and the entrypoint
+    # rightly runs `occ upgrade` rather than refusing).
     case "${NC_MAJOR:-33}" in
-        32|33|34|35|36) ;;
+        33|34|35|36) ;;
         *) skip "scenario NC_MAJOR=$NC_MAJOR doesn't make sense for the 31→ skip test" ;;
     esac
 }
