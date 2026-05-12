@@ -19,7 +19,7 @@ setup() {
 }
 
 @test "the sidecar uses /cron.sh from the same image" {
-    run compose exec -T nc-cron sh -c 'ls -l /cron.sh && head -1 /cron.sh'
+    run compose exec -T nc-cron sh -c 'ls -l /cron.sh && cat /cron.sh'
     assert_status_zero "$status"
     assert_match "$output" 'busybox crond'
 }
