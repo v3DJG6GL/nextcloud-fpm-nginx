@@ -8,6 +8,19 @@ load '../helpers/http.bash'
 load '../helpers/nc.bash'
 load '../helpers/docker.bash'
 
+setup_file() {
+    # Make sure no previous test left maintenance mode on (could happen if
+    # a different bats file failed mid-test).
+    occ maintenance:mode --off >/dev/null 2>&1 || true
+    sleep 1
+}
+
+teardown_file() {
+    # Always clear maintenance mode after this file so other tests downstream
+    # see a clean state.
+    occ maintenance:mode --off >/dev/null 2>&1 || true
+}
+
 @test "default state: maintenance=false" {
     run occ status --output=json
     assert_status_zero "$status"

@@ -15,10 +15,12 @@ load '../helpers/nc.bash'
     [ -n "$output" ]
 }
 
-@test "/ with trusted Host returns 200" {
+@test "/ with trusted Host returns 2xx or 3xx (not 400 untrusted-domain)" {
     run nc_status_code / -H 'Host: localhost'
     assert_status_zero "$status"
-    [ "$output" = "200" ] || [ "$output" = "302" ]   # depending on first-run wizard
+    # Trusted Host: any 2xx/3xx is fine (200, 301 to https, 302 to /login, etc).
+    # Must NOT be 400 (Access through untrusted domain page).
+    [ "$output" -ge 200 ] && [ "$output" -lt 400 ]
 }
 
 @test "/ with untrusted Host returns 400 with 'Access through untrusted domain' body" {
