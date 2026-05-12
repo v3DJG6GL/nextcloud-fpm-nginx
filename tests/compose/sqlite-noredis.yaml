@@ -11,6 +11,18 @@ services:
       # notify_push REQUIRES a non-SQLite DB; force it off here regardless of input.
       NOTIFY_PUSH_ENABLE: 'false'
       NEXTCLOUD_CRON_ENABLE: ${NC_CRON_INCONTAINER:-false}
+      PHP_TIMEZONE: America/Anchorage
+      PHP_MEMORY_LIMIT: 1G
+      PHP_UPLOAD_LIMIT: 4G
+      PHP_OPCACHE_MEMORY_CONSUMPTION: 256
+      PHP_OPCACHE_MAX_ACCELERATED_FILES: 50000
+      PHP_OPCACHE_JIT_BUFFER_SIZE: 384M
+      PHP_OPCACHE_INTERNED_STRINGS_BUFFER: 64
+      FPM_PM: static
+      FPM_PM_MAX_CHILDREN: 9
+      FPM_REQUEST_TERMINATE_TIMEOUT: 300
+      NGINX_SERVER_NAME: test.local
+      NGINX_HSTS: "max-age=31536000; includeSubDomains"
     ports:
       - '0:80'
     healthcheck:
