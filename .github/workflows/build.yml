@@ -115,10 +115,19 @@ jobs:
           cache-to: type=gha,scope=nc-${{ matrix.build.major }}-amd64,mode=max
 
       - name: container-structure-test (image-static assertions)
-        uses: plexsystems/container-structure-test-action@c0a028aa96e8e82ae35be556040340cbb3e280ca
-        with:
-          image: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
-          configs: tests/cst/base.yaml,tests/cst/nginx.yaml,tests/cst/php.yaml,tests/cst/notify_push.yaml
+        env:
+          IMG: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
+          CST_VERSION: v1.22.1
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /usr/local/bin/container-structure-test \
+            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-amd64"
+          chmod +x /usr/local/bin/container-structure-test
+          container-structure-test test --image "$IMG" \
+            --config tests/cst/base.yaml \
+            --config tests/cst/nginx.yaml \
+            --config tests/cst/php.yaml \
+            --config tests/cst/notify_push.yaml
 
       - name: Install bats-core
         uses: bats-core/bats-action@3.0.1
@@ -177,10 +186,19 @@ jobs:
           cache-to: type=gha,scope=nc-${{ matrix.build.major }}-arm64,mode=max
 
       - name: container-structure-test
-        uses: plexsystems/container-structure-test-action@c0a028aa96e8e82ae35be556040340cbb3e280ca
-        with:
-          image: nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
-          configs: tests/cst/base.yaml,tests/cst/nginx.yaml,tests/cst/php.yaml,tests/cst/notify_push.yaml
+        env:
+          IMG: nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
+          CST_VERSION: v1.22.1
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /usr/local/bin/container-structure-test \
+            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-arm64"
+          chmod +x /usr/local/bin/container-structure-test
+          container-structure-test test --image "$IMG" \
+            --config tests/cst/base.yaml \
+            --config tests/cst/nginx.yaml \
+            --config tests/cst/php.yaml \
+            --config tests/cst/notify_push.yaml
 
       - name: Smoke (nginx -t, php-fpm -t, notify_push --version)
         run: |
