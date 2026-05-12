@@ -1,0 +1,99 @@
+# Example deployment behind a reverse proxy (e.g., Nginx Proxy Manager).
+# This compose file does NOT publish ports directly; the reverse proxy reaches
+# the `app` service on the `proxy` network at port 80. See README for NPM setup.
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks: [backend]
+
+  app: &app
+    image: ghcr.io/v3djg6gl/nextcloud-fpm-nginx:v33
+    restart: unless-stopped
+    depends_on: [db, redis]
+    environment:
+      # Database
+      POSTGRES_HOST: db
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+
+      # Redis (file locking + memcache)
+      REDIS_HOST: redis
+
+      # Initial install — only used on first startup
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nc_admin_password
+      NEXTCLOUD_TRUSTED_DOMAINS: cloud.example.com
+
+      # ── Optional tuning (all of the below are examples; delete what you don't need) ──
+
+      # PHP defaults are inherited from the upstream image; these override.
+      PHP_MEMORY_LIMIT: 1G
+      PHP_UPLOAD_LIMIT: 16G
+      PHP_OPCACHE_MEMORY_CONSUMPTION: 1024
+      PHP_OPCACHE_INTERNED_STRINGS_BUFFER: 64
+      PHP_OPCACHE_MAX_ACCELERATED_FILES: 50000
+      PHP_OPCACHE_JIT_BUFFER_SIZE: 256M
+      PHP_TIMEZONE: Europe/Zurich
+
+      # PHP-FPM pool: switch to static for predictable burst latency.
+      FPM_PM: static
+      FPM_PM_MAX_CHILDREN: 25
+      FPM_PM_MAX_REQUESTS: 500
+      FPM_REQUEST_TERMINATE_TIMEOUT: 300
+
+      # Pin the nginx host (defaults to catch-all `_`).
+      NGINX_SERVER_NAME: cloud.example.com
+      # NGINX_HSTS: "max-age=31536000; includeSubDomains"
+    secrets:
+      - db_password
+      - nc_admin_password
+    volumes:
+      - nextcloud:/var/www/html
+      - ./data:/var/www/html/data
+      # Optional bind-mount overrides:
+      # - ./php-local.ini:/usr/local/etc/php/conf.d/99-local.ini:ro
+      # - ./www2.conf:/usr/local/etc/php-fpm.d/zzz-local.conf:ro
+    networks:
+      - backend
+      - proxy
+
+  # Cron sidecar — same image, runs Nextcloud's background jobs every 5 min.
+  cron:
+    <<: *app
+    depends_on: [app, db, redis]
+    entrypoint: []
+    command: ["/cron.sh"]
+    networks: [backend]
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  nc_admin_password:
+    file: ./secrets/nc_admin_password
+
+volumes:
+  db-data:
+  nextcloud:
+
+networks:
+  backend:
+  proxy:
+    external: true
+    name: npm-proxy
