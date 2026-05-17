@@ -45,39 +45,37 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         usermod -o -u "$target_uid" www-data
     fi
 
-    # Probe a single persistent file. Skip the (potentially hours-long)
-    # walk ONLY when the sentinel both exists AND already matches the
-    # target ownership — that means a previous boot already chowned the
-    # tree. In every other case (sentinel missing, sentinel owned by a
-    # different uid/gid), run the chown.
-    sentinel=/var/www/html/version.php
-    if [ -f "$sentinel" ] \
-       && [ "$(stat -c '%u' "$sentinel")" = "$target_uid" ] \
-       && [ "$(stat -c '%g' "$sentinel")" = "$target_gid" ]; then
-        # Already correct; subsequent boot of an already-migrated tree.
-        :
-    else
-        if [ -f "$sentinel" ]; then
-            reason="sentinel ${sentinel} was $(stat -c '%u:%g' "$sentinel"), target ${target_uid}:${target_gid}"
-        else
-            reason="fresh install — no sentinel ${sentinel} yet"
-        fi
-        echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www (${reason}; may take a while)" >&2
-        chown -R "${target_uid}:${target_gid}" /var/www
-    fi
-
-    # --- Optional: chown an external datadirectory --------------------------
-    # If the NC `datadirectory` config points OUTSIDE /var/www/ (e.g.
-    # mounted at /data instead of /var/www/html/data), the /var/www chown
-    # above doesn't reach it. Detect the path and gate the chown on the
-    # same sentinel pattern.
+    # --- Dual-sentinel-gated recursive chowns -----------------------------
+    # Two distinct on-disk trees may need chowning:
+    #   - /var/www         (the webroot — image-layer files + bind-mounted
+    #                       webroot + nested data if datadir is the default
+    #                       /var/www/html/data on the same mount)
+    #   - $data_dir        (NC's actual data dir — could be on the SAME
+    #                       bind mount as the webroot, or a SEPARATE one
+    #                       even when nested under /var/www/html/)
     #
-    # Source of truth for `datadirectory`, in priority order:
-    #   1. NEXTCLOUD_DATA_DIR env (honoured during fresh install by the
-    #      upstream entrypoint — useful BEFORE config.php exists).
-    #   2. config.php (the persistent source of truth post-install).
-    # PHP is in the base image so we read it the robust way (avoids
-    # fragile grep against config.php's array syntax).
+    # We check BOTH sentinels independently — bind mounts can be on
+    # different filesystems even when paths look nested. Example: webroot
+    # on SSD bind-mounted to /var/www/html, data dir on HDD bind-mounted
+    # to /var/www/html/data. The /var/www chown traverses both, but if
+    # an earlier chown was interrupted or one bind mount was rw and the
+    # other was ro, the two trees can drift. version.php (on the SSD)
+    # would say "everything OK" while .ncdata (on the HDD) is still
+    # owned by the old uid. Hence: check both, chown what's wrong.
+    #
+    # Skip a chown ONLY when its sentinel BOTH exists AND already matches
+    # the target. Sentinel files:
+    #   - /var/www/html/version.php   — written by upstream rsync, always
+    #                                   present on a healthy NC install
+    #   - $data_dir/.ncdata           — written by NC on install, used by
+    #                                   NC itself to validate the data dir
+    #                                   on every boot (`.ocdata` legacy
+    #                                   from ownCloud era is the fallback)
+
+    # 1. Determine the data dir. Env var wins (fresh-install hint, used
+    #    by the upstream entrypoint before config.php exists). Otherwise
+    #    read from config.php via `php -r` (robust against config.php's
+    #    array-syntax variations; the upstream image has the PHP CLI).
     data_dir=""
     if [ -n "${NEXTCLOUD_DATA_DIR:-}" ]; then
         data_dir="$NEXTCLOUD_DATA_DIR"
@@ -89,44 +87,78 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         ' 2>/dev/null) || data_dir=""
     fi
 
-    case "$data_dir" in
-        # Empty (no datadirectory configured yet, or env unset on fresh
-        # install) → skip. The upstream entrypoint will create one and
-        # the next boot will see it.
-        ""|/var/www/*)
-            # Either empty or under /var/www/ → already covered by the
-            # chown above. Nothing extra to do.
-            :
-            ;;
-        *)
-            # External data dir. Sentinel: NC's marker file
-            # (`.ncdata` since NC 28, `.ocdata` legacy). NC creates it on
-            # install and uses it to validate the data dir on every boot,
-            # so it's always present in a healthy install and is owned by
-            # www-data by design.
-            data_sentinel=""
-            if [ -f "$data_dir/.ncdata" ]; then
-                data_sentinel="$data_dir/.ncdata"
-            elif [ -f "$data_dir/.ocdata" ]; then
-                data_sentinel="$data_dir/.ocdata"
-            fi
+    # 2. Check the /var/www sentinel.
+    www_sentinel=/var/www/html/version.php
+    www_needs_chown=1
+    if [ -f "$www_sentinel" ] \
+       && [ "$(stat -c '%u' "$www_sentinel")" = "$target_uid" ] \
+       && [ "$(stat -c '%g' "$www_sentinel")" = "$target_gid" ]; then
+        www_needs_chown=0
+    fi
 
-            if [ -n "$data_sentinel" ] \
-               && [ "$(stat -c '%u' "$data_sentinel")" = "$target_uid" ] \
-               && [ "$(stat -c '%g' "$data_sentinel")" = "$target_gid" ]; then
-                # Already correct; skip the walk.
-                :
-            elif [ -d "$data_dir" ]; then
-                if [ -n "$data_sentinel" ]; then
-                    reason="sentinel ${data_sentinel} was $(stat -c '%u:%g' "$data_sentinel"), target ${target_uid}:${target_gid}"
+    # 3. Check the data-dir sentinel (always — even when datadir is the
+    #    default /var/www/html/data, because it could still be on a
+    #    different bind mount than the webroot).
+    data_sentinel=""
+    if [ -n "$data_dir" ]; then
+        if [ -f "$data_dir/.ncdata" ]; then
+            data_sentinel="$data_dir/.ncdata"
+        elif [ -f "$data_dir/.ocdata" ]; then
+            data_sentinel="$data_dir/.ocdata"
+        fi
+    fi
+    data_needs_chown=0   # default: no separate data chown
+    if [ -n "$data_dir" ] && [ -d "$data_dir" ]; then
+        if [ -z "$data_sentinel" ] \
+           || [ "$(stat -c '%u' "$data_sentinel")" != "$target_uid" ] \
+           || [ "$(stat -c '%g' "$data_sentinel")" != "$target_gid" ]; then
+            data_needs_chown=1
+        fi
+    fi
+
+    # 4. Run the chowns. If /var/www needs it AND data_dir lives under
+    #    /var/www/, the /var/www chown covers data_dir transitively — no
+    #    separate data chown needed. Otherwise (data outside /var/www, or
+    #    only data drifted), run a targeted data chown.
+    if [ "$www_needs_chown" = "1" ]; then
+        if [ -f "$www_sentinel" ]; then
+            reason="$www_sentinel was $(stat -c '%u:%g' "$www_sentinel"), target ${target_uid}:${target_gid}"
+        else
+            reason="fresh install — no $www_sentinel yet"
+        fi
+        echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www (${reason}; may take a while)" >&2
+        chown -R "${target_uid}:${target_gid}" /var/www
+    fi
+    if [ "$data_needs_chown" = "1" ]; then
+        # Skip if /var/www chown above already covered this path:
+        case "$data_dir" in
+            /var/www/*)
+                if [ "$www_needs_chown" = "1" ]; then
+                    : # already chowned by /var/www walk
                 else
-                    reason="no .ncdata/.ocdata sentinel in ${data_dir} yet (fresh data dir, or pre-NC-init)"
+                    # /var/www was OK but data dir drifted (different
+                    # bind mount under /var/www/html/data) — chown only it.
+                    if [ -n "$data_sentinel" ]; then
+                        reason="$data_sentinel was $(stat -c '%u:%g' "$data_sentinel"), target ${target_uid}:${target_gid} (separate bind mount?)"
+                    else
+                        reason="no .ncdata/.ocdata in $data_dir yet"
+                    fi
+                    echo "entrypoint: chown -R ${target_uid}:${target_gid} $data_dir ($reason; may take a while on large data)" >&2
+                    chown -R "${target_uid}:${target_gid}" "$data_dir"
                 fi
-                echo "entrypoint: chown -R ${target_uid}:${target_gid} ${data_dir} (${reason}; may take a while on large data)" >&2
+                ;;
+            *)
+                # External data dir — never covered by /var/www chown.
+                if [ -n "$data_sentinel" ]; then
+                    reason="$data_sentinel was $(stat -c '%u:%g' "$data_sentinel"), target ${target_uid}:${target_gid}"
+                else
+                    reason="no .ncdata/.ocdata sentinel in $data_dir yet (fresh data dir, or pre-NC-init)"
+                fi
+                echo "entrypoint: chown -R ${target_uid}:${target_gid} $data_dir ($reason; may take a while on large data)" >&2
                 chown -R "${target_uid}:${target_gid}" "$data_dir"
-            fi
-            ;;
-    esac
+                ;;
+        esac
+    fi
 fi
 
 # --- UMASK -------------------------------------------------------------------

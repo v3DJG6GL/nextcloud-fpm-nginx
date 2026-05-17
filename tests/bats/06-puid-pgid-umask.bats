@@ -191,6 +191,70 @@ teardown() {
     docker volume rm "$datavol" >/dev/null 2>&1 || true
 }
 
+# Dual-sentinel regression: when datadir is the default
+# /var/www/html/data BUT mounted on a separate bind mount than the
+# webroot, the two trees can drift apart in ownership. We must detect
+# this via .ncdata even though the path looks nested under /var/www.
+@test "drift between separate webroot + data bind mounts triggers data-only chown" {
+    local wwwvol="puid-drift-www-$$"
+    local datavol="puid-drift-data-$$"
+
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1800 -e PGID=1800 \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        -v "${wwwvol}:/var/www/html" \
+        -v "${datavol}:/var/www/html/data" \
+        "$NC_IMAGE" >/dev/null
+
+    # Wait for install to create both sentinels:
+    local i
+    for i in $(seq 1 60); do
+        docker exec "$PUID_TEST_NAME" test -f /var/www/html/data/.ncdata 2>/dev/null && break
+        sleep 1
+    done
+    run docker exec "$PUID_TEST_NAME" stat -c '%u:%g' /var/www/html/data/.ncdata
+    assert_status_zero "$status"
+    assert_eq "$output" "1800:1800"
+
+    # Simulate drift: force the data dir back to root ownership.
+    docker exec "$PUID_TEST_NAME" chown -R 0:0 /var/www/html/data
+
+    # Recreate. version.php should still be 1800:1800 (separate vol),
+    # so the /var/www chown should be SKIPPED. But .ncdata is now 0:0,
+    # so the targeted data-dir chown MUST run.
+    docker stop "$PUID_TEST_NAME" >/dev/null
+    docker rm   "$PUID_TEST_NAME" >/dev/null
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1800 -e PGID=1800 \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        -v "${wwwvol}:/var/www/html" \
+        -v "${datavol}:/var/www/html/data" \
+        "$NC_IMAGE" >/dev/null
+    sleep 6
+
+    local www_chown data_chown
+    www_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 \
+        | grep -c 'chown -R 1800:1800 /var/www (.*may take a while' || true)
+    data_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 \
+        | grep -c 'chown -R 1800:1800 /var/www/html/data' || true)
+
+    assert_eq "$www_chown" "0" \
+        "/var/www chown should be SKIPPED on recreate (version.php sentinel still 1800:1800)"
+    [ "$data_chown" -ge 1 ] \
+        || { log "expected data-dir chown to fire on drift; got $data_chown lines"; return 1; }
+
+    # And after the targeted chown, .ncdata should be back to 1800:1800:
+    run docker exec "$PUID_TEST_NAME" stat -c '%u:%g' /var/www/html/data/.ncdata
+    assert_status_zero "$status"
+    assert_eq "$output" "1800:1800"
+
+    docker volume rm "$wwwvol" "$datavol" >/dev/null 2>&1 || true
+}
+
 @test "UMASK propagates to child processes" {
     docker run -d --name "$PUID_TEST_NAME" \
         -e UMASK=027 \
