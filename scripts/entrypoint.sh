@@ -116,25 +116,54 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         fi
     fi
 
-    # 4. Run the chowns. If /var/www needs it AND data_dir lives under
-    #    /var/www/, the /var/www chown covers data_dir transitively — no
-    #    separate data chown needed. Otherwise (data outside /var/www, or
-    #    only data drifted), run a targeted data chown.
+    # 4. Run the chowns.
+    #
+    # The KEY optimisation: if `data_dir` is nested under /var/www but its
+    # sentinel says ownership is already correct, we PRUNE it from the
+    # /var/www walk. Otherwise a multi-TB data subtree gets stat-walked
+    # unnecessarily on every migration first-boot where version.php is
+    # missing (e.g. after the LSIO-flatten step). With prune, the walk
+    # touches only the webroot/code (small, fast) — the data subtree is
+    # left alone since we already trust .ncdata.
     if [ "$www_needs_chown" = "1" ]; then
         if [ -f "$www_sentinel" ]; then
-            reason="$www_sentinel was $(stat -c '%u:%g' "$www_sentinel"), target ${target_uid}:${target_gid}"
+            www_reason="$www_sentinel was $(stat -c '%u:%g' "$www_sentinel"), target ${target_uid}:${target_gid}"
         else
-            reason="fresh install — no $www_sentinel yet"
+            www_reason="fresh webroot — no $www_sentinel yet"
         fi
-        echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www (${reason}; may take a while)" >&2
-        chown -R "${target_uid}:${target_gid}" /var/www
+
+        # Decide whether to prune data_dir from the walk.
+        prune_data=0
+        case "$data_dir" in
+            /var/www/*)
+                # data_dir is nested under /var/www. Prune it ONLY when
+                # its sentinel proved ownership is already correct
+                # (data_needs_chown=0). If data also needs chowning, the
+                # plain `chown -R /var/www` walks it transitively and we
+                # save ourselves a second pass.
+                if [ "$data_needs_chown" = "0" ] && [ -d "$data_dir" ]; then
+                    prune_data=1
+                fi
+                ;;
+        esac
+
+        if [ "$prune_data" = "1" ]; then
+            echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www [pruning $data_dir, .ncdata already $(stat -c '%u:%g' "$data_sentinel")] ($www_reason)" >&2
+            find /var/www -path "$data_dir" -prune -o \
+                -exec chown -h "${target_uid}:${target_gid}" {} +
+        else
+            echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www ($www_reason; may take a while)" >&2
+            chown -R "${target_uid}:${target_gid}" /var/www
+        fi
     fi
+
     if [ "$data_needs_chown" = "1" ]; then
-        # Skip if /var/www chown above already covered this path:
+        # Skip if the /var/www chown above already covered this path
+        # (it didn't prune data_dir because data_needs_chown was 1).
         case "$data_dir" in
             /var/www/*)
                 if [ "$www_needs_chown" = "1" ]; then
-                    : # already chowned by /var/www walk
+                    : # already chowned by /var/www walk (no prune happened)
                 else
                     # /var/www was OK but data dir drifted (different
                     # bind mount under /var/www/html/data) — chown only it.

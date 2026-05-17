@@ -255,6 +255,69 @@ teardown() {
     docker volume rm "$wwwvol" "$datavol" >/dev/null 2>&1 || true
 }
 
+# Regression for the LSIO-migration first-boot perf issue: after the
+# flatten step, /var/www/html/version.php is missing (it lived inside
+# www/nextcloud/ which got moved to LSIO_BACKUP) so the www sentinel
+# triggers a chown. WITHOUT the prune optimisation, that chown
+# stat-walks the multi-TB data dir even though .ncdata says ownership
+# is already correct — hours of wasted IO on every migration.
+@test "first-boot after flatten prunes data dir when .ncdata sentinel matches" {
+    local wwwvol="puid-prune-www-$$"
+    local datavol="puid-prune-data-$$"
+
+    # Bootstrap a NC instance to create both sentinels at PUID=1900:
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1900 -e PGID=1900 \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        -v "${wwwvol}:/var/www/html" \
+        -v "${datavol}:/var/www/html/data" \
+        "$NC_IMAGE" >/dev/null
+    local i
+    for i in $(seq 1 60); do
+        docker exec "$PUID_TEST_NAME" test -f /var/www/html/data/.ncdata 2>/dev/null && break
+        sleep 1
+    done
+    run docker exec "$PUID_TEST_NAME" stat -c '%u:%g' /var/www/html/data/.ncdata
+    assert_eq "$output" "1900:1900"
+
+    # Simulate the migration-flatten state: data dir intact, version.php gone:
+    docker exec "$PUID_TEST_NAME" rm -f /var/www/html/version.php
+
+    # Recreate. New boot:
+    #   www_sentinel missing  -> www_needs_chown=1
+    #   .ncdata correct       -> data_needs_chown=0
+    #   data_dir under /var/www → MUST prune the walk
+    docker stop "$PUID_TEST_NAME" >/dev/null
+    docker rm   "$PUID_TEST_NAME" >/dev/null
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1900 -e PGID=1900 \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        -v "${wwwvol}:/var/www/html" \
+        -v "${datavol}:/var/www/html/data" \
+        "$NC_IMAGE" >/dev/null
+    sleep 8
+
+    local prune_lines
+    prune_lines=$(docker logs "$PUID_TEST_NAME" 2>&1 \
+        | grep -c 'pruning /var/www/html/data' || true)
+    [ "$prune_lines" -ge 1 ] \
+        || { log "expected the entrypoint to prune the data dir; saw $prune_lines lines"; return 1; }
+
+    # And just plain `chown -R /var/www` (without the prune annotation)
+    # MUST NOT appear — that'd mean we re-walked the data dir.
+    local unconditional_chown
+    unconditional_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 \
+        | grep -cE 'chown -R 1900:1900 /var/www \(' || true)
+    assert_eq "$unconditional_chown" "0" \
+        "expected NO unconditional /var/www chown — should have pruned the data subtree"
+
+    docker volume rm "$wwwvol" "$datavol" >/dev/null 2>&1 || true
+}
+
 @test "UMASK propagates to child processes" {
     docker run -d --name "$PUID_TEST_NAME" \
         -e UMASK=027 \
