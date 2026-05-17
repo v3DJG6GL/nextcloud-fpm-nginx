@@ -328,8 +328,9 @@ teardown() {
     # The entrypoint script itself must not call the `usermod`/`groupmod`
     # binaries when changing uid/gid. They're allowed to exist in the
     # image (other things might want them), but our entrypoint must use
-    # direct file edits.
-    run docker exec "$NC_IMAGE_CTN" sh -c '
+    # direct file edits — usermod -u does an implicit recursive home-dir
+    # chown which hangs for hours on multi-TB data volumes.
+    run compose_exec sh -c '
         grep -E "^[[:space:]]*(usermod|groupmod)[[:space:]]" \
             /usr/local/bin/container-entrypoint.sh || true
     '
