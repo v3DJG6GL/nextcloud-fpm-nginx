@@ -23,13 +23,16 @@ load '../helpers/http.bash'
 # browsers refuse to execute the JS and the login form never mounts). See
 # nginx.conf http {} block.
 
-@test "served .js gets application/javascript (not octet-stream)" {
+@test "served .js gets a javascript mime (not octet-stream)" {
+    # Accept either application/javascript or text/javascript (RFC 9239
+    # standardised the latter in 2022 and recent Debian mime.types use it).
+    # The regression we're guarding against is octet-stream + nosniff.
     run nc_headers /core/js/oc.js
     assert_status_zero "$status"
     local ct
     ct=$(header_value "$output" Content-Type)
-    [[ "$ct" == application/javascript* ]] \
-        || { log "expected application/javascript, got: $ct"; return 1; }
+    [[ "$ct" == *javascript* ]] \
+        || { log "expected */javascript, got: $ct"; return 1; }
 }
 
 @test "served .css gets text/css (not octet-stream)" {
