@@ -4,6 +4,7 @@
 
 load '../helpers/lib.bash'
 load '../helpers/docker.bash'
+load '../helpers/compose.bash'   # compose_exec used by the no-usermod regression test
 
 PUID_TEST_NAME="nc-puid-test-$$"
 
@@ -330,10 +331,7 @@ teardown() {
     # image (other things might want them), but our entrypoint must use
     # direct file edits — usermod -u does an implicit recursive home-dir
     # chown which hangs for hours on multi-TB data volumes.
-    run compose_exec sh -c '
-        grep -E "^[[:space:]]*(usermod|groupmod)[[:space:]]" \
-            /usr/local/bin/container-entrypoint.sh || true
-    '
+    run compose_exec sh -c 'grep -nE "^[[:space:]]*(usermod|groupmod)[[:space:]]" /usr/local/bin/container-entrypoint.sh || true'
     assert_status_zero "$status"
     [ -z "$output" ] \
         || { log "entrypoint still invokes usermod/groupmod (matches: $output)"; return 1; }
