@@ -95,8 +95,10 @@ teardown() {
         "$NC_IMAGE" >/dev/null
     sleep 10
 
+    # `grep -c` exits 1 when count is 0; swallow that so $() doesn't trip
+    # bats' set -e (we want to assert ON the count, not on grep's exit code).
     local first_chown
-    first_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'chown -R 1500:1500 /var/www')
+    first_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'chown -R 1500:1500 /var/www' || true)
     [ "$first_chown" -ge 1 ] \
         || { log "expected chown on first boot, got $first_chown lines"; return 1; }
 
@@ -119,12 +121,15 @@ teardown() {
     sleep 6
 
     local recreated_usermod
-    recreated_usermod=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'usermod www-data 33 -> 1500')
+    recreated_usermod=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'usermod www-data 33 -> 1500' || true)
     assert_eq "$recreated_usermod" "1" \
         "usermod should run on recreate (/etc/passwd reset to image default)"
 
+    # `|| true` — grep -c exits 1 when count is 0, which IS the expected
+    # success case here. We want to assert on the integer, not have the
+    # zero-match exit code fail the test before we get there.
     local recreated_chown
-    recreated_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'chown -R 1500:1500 /var/www')
+    recreated_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'chown -R 1500:1500 /var/www' || true)
     assert_eq "$recreated_chown" "0" \
         "chown should be SKIPPED on recreate (sentinel /var/www/html/version.php already 1500:1500)"
 
