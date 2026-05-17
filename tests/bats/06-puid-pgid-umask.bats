@@ -137,6 +137,60 @@ teardown() {
     docker volume rm "$vol" >/dev/null 2>&1 || true
 }
 
+# External datadirectory (NEXTCLOUD_DATA_DIR pointed outside /var/www/) —
+# the /var/www chown doesn't reach it, so the entrypoint must do a
+# separate chown gated on .ncdata/.ocdata sentinel.
+@test "external NEXTCLOUD_DATA_DIR gets chowned via its own sentinel" {
+    local datavol="puid-extdata-vol-$$"
+
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1700 -e PGID=1700 \
+        -e NEXTCLOUD_DATA_DIR=/srv/nc-data \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        -v "${datavol}:/srv/nc-data" \
+        "$NC_IMAGE" >/dev/null
+
+    # First boot: data dir starts empty → fresh-install branch → chown runs.
+    # Wait up to 60s for upstream install to finish (creates .ncdata):
+    local i
+    for i in $(seq 1 60); do
+        docker exec "$PUID_TEST_NAME" test -f /srv/nc-data/.ncdata 2>/dev/null && break
+        sleep 1
+    done
+    run docker exec "$PUID_TEST_NAME" stat -c '%u:%g' /srv/nc-data/.ncdata
+    assert_status_zero "$status"
+    assert_eq "$output" "1700:1700"
+
+    local first_data_chown
+    first_data_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 \
+        | grep -c 'chown -R 1700:1700 /srv/nc-data' || true)
+    [ "$first_data_chown" -ge 1 ] \
+        || { log "expected data-dir chown on first boot, got $first_data_chown"; return 1; }
+
+    # Recreate container, same volume → sentinel matches → chown SKIPPED:
+    docker stop "$PUID_TEST_NAME" >/dev/null
+    docker rm   "$PUID_TEST_NAME" >/dev/null
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1700 -e PGID=1700 \
+        -e NEXTCLOUD_DATA_DIR=/srv/nc-data \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        -v "${datavol}:/srv/nc-data" \
+        "$NC_IMAGE" >/dev/null
+    sleep 6
+
+    local recreated_data_chown
+    recreated_data_chown=$(docker logs "$PUID_TEST_NAME" 2>&1 \
+        | grep -c 'chown -R 1700:1700 /srv/nc-data' || true)
+    assert_eq "$recreated_data_chown" "0" \
+        "external data-dir chown should be SKIPPED on recreate (sentinel already 1700:1700)"
+
+    docker volume rm "$datavol" >/dev/null 2>&1 || true
+}
+
 @test "UMASK propagates to child processes" {
     docker run -d --name "$PUID_TEST_NAME" \
         -e UMASK=027 \

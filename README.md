@@ -173,6 +173,8 @@ Host user mapping (LSIO-style):
 
 **Caveat for `PUID` changes:** the first run with a new `PUID` chowns the entire `/var/www` tree. On a multi-TB data volume this can take hours. Subsequent boots — including container recreation after a `docker compose pull` + `up -d` — **skip the chown**: the entrypoint probes a sentinel file (`version.php`) and only walks the tree when the on-disk ownership actually differs from `PUID:PGID`. `groupmod`/`usermod` still run every fresh-container boot because `/etc/passwd` doesn't persist across container recreation; those are cheap (one-line edits).
 
+**External `datadirectory`** (config.php points outside `/var/www/`, e.g. `'/data'` or `'/srv/nc-data'`): the same sentinel-gated chown also runs against that path, using NC's `.ncdata` (or legacy `.ocdata`) marker file as the sentinel. The entrypoint reads `datadirectory` from `config.php` (or `NEXTCLOUD_DATA_DIR` env on fresh install) and only chowns when the marker is missing or owned by something other than `PUID:PGID`.
+
 Unsetting an env var on the next container start cleanly removes the
 corresponding override (the hook script rebuilds all override files from
 scratch each start).
