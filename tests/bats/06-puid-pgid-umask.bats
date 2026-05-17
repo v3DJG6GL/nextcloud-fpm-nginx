@@ -94,7 +94,21 @@ teardown() {
         -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
         -v "${vol}:/var/www/html" \
         "$NC_IMAGE" >/dev/null
-    sleep 10
+
+    # Wait for upstream install to finish creating .ncdata at the expected
+    # ownership. Without this, racing the install means the recreate below
+    # sees a missing .ncdata sentinel → data-dir chown fires → false test
+    # failure. Up to 60s for sqlite install.
+    local i
+    for i in $(seq 1 60); do
+        if docker exec "$PUID_TEST_NAME" sh -c '
+            [ -f /var/www/html/version.php ] \
+            && [ -f /var/www/html/data/.ncdata ] \
+            && [ "$(stat -c %u:%g /var/www/html/version.php)" = "1500:1500" ] \
+            && [ "$(stat -c %u:%g /var/www/html/data/.ncdata)"  = "1500:1500" ]
+        ' 2>/dev/null; then break; fi
+        sleep 1
+    done
 
     # `grep -c` exits 1 when count is 0; swallow that so $() doesn't trip
     # bats' set -e (we want to assert ON the count, not on grep's exit code).
