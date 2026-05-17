@@ -45,25 +45,25 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         usermod -o -u "$target_uid" www-data
     fi
 
-    # Probe a single persistent file — if it's already owned target:target,
-    # the rest of /var/www is too (the previous boot already chowned it),
-    # and we can skip the expensive walk.
+    # Probe a single persistent file. Skip the (potentially hours-long)
+    # walk ONLY when the sentinel both exists AND already matches the
+    # target ownership — that means a previous boot already chowned the
+    # tree. In every other case (sentinel missing, sentinel owned by a
+    # different uid/gid), run the chown.
     sentinel=/var/www/html/version.php
-    if [ -f "$sentinel" ]; then
-        disk_uid=$(stat -c '%u' "$sentinel")
-        disk_gid=$(stat -c '%g' "$sentinel")
-        if [ "$disk_uid" = "$target_uid" ] && [ "$disk_gid" = "$target_gid" ]; then
-            : # already correct; skip the walk
-        else
-            echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www (sentinel ${sentinel} was ${disk_uid}:${disk_gid}, may take a while)" >&2
-            chown -R "${target_uid}:${target_gid}" /var/www
-        fi
-    else
-        # First boot (fresh install — version.php gets written by the
-        # upstream entrypoint after rsync). Nothing persistent to chown
-        # yet; the upstream rsync chowns its output, and the next boot
-        # will sentinel-match. Skip the walk this time.
+    if [ -f "$sentinel" ] \
+       && [ "$(stat -c '%u' "$sentinel")" = "$target_uid" ] \
+       && [ "$(stat -c '%g' "$sentinel")" = "$target_gid" ]; then
+        # Already correct; subsequent boot of an already-migrated tree.
         :
+    else
+        if [ -f "$sentinel" ]; then
+            reason="sentinel ${sentinel} was $(stat -c '%u:%g' "$sentinel"), target ${target_uid}:${target_gid}"
+        else
+            reason="fresh install — no sentinel ${sentinel} yet"
+        fi
+        echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www (${reason}; may take a while)" >&2
+        chown -R "${target_uid}:${target_gid}" /var/www
     fi
 fi
 
