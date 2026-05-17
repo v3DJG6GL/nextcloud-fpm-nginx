@@ -177,7 +177,11 @@ Host user mapping (LSIO-style):
 
 Unsetting an env var on the next container start cleanly removes the
 corresponding override (the hook script rebuilds all override files from
-scratch each start).
+scratch each start). Compose's quirky empty-value forms (`FOO=''`,
+`FOO=""`, `FOO=`, `FOO='   '`) are treated as "unset" — the entrypoint
+trims whitespace, strips one matched pair of surrounding quotes, and
+skips the directive (with a `render-overrides: skipping …` line on
+stderr) instead of emitting `key = ''` and crashing php-fpm at startup.
 
 ### Verifying what actually got applied
 

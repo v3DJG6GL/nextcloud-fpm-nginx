@@ -28,48 +28,83 @@ nginx_conf=/etc/nginx/conf.d/90-env-overrides.conf
 : > "$fpm_conf"
 : > "$nginx_conf"
 
+# clean_val NAME — echoes the env var's value with surrounding whitespace and
+# one pair of surrounding single/double quotes stripped. Returns empty if the
+# var is unset, empty, whitespace-only, or "" / ''. This guards the INI
+# emitters below against compose oddities like  FOO=''  or  FOO="  "  which
+# would otherwise produce `key = ''` / `key =   ` — both rejected by the
+# PHP/FPM INI parser as "value is NULL for a ZEND_INI_PARSER_ENTRY", killing
+# php-fpm before it can serve a single request.
+clean_val() {
+    eval "raw=\${$1-}"
+    # trim leading/trailing whitespace
+    raw=${raw#"${raw%%[![:space:]]*}"}
+    raw=${raw%"${raw##*[![:space:]]}"}
+    # strip one matched pair of surrounding quotes
+    case "$raw" in
+        \"*\") raw=${raw#\"}; raw=${raw%\"} ;;
+        \'*\') raw=${raw#\'}; raw=${raw%\'} ;;
+    esac
+    # re-trim after quote stripping (handles `" foo "`)
+    raw=${raw#"${raw%%[![:space:]]*}"}
+    raw=${raw%"${raw##*[![:space:]]}"}
+    printf '%s' "$raw"
+}
+
+emit_ini() {
+    file=$1; key=$2; var=$3
+    val=$(clean_val "$var")
+    if [ -z "$val" ]; then
+        eval "orig=\${$var-__UNSET__}"
+        if [ "$orig" != "__UNSET__" ] && [ -n "$orig" ]; then
+            echo "render-overrides: skipping ${key} — \$${var} is empty/whitespace/quotes-only after trim" >&2
+        fi
+        return 0
+    fi
+    echo "${key}=${val}" >> "$file"
+}
+
 # --- PHP ini overrides --------------------------------------------------------
 
-[ -n "${PHP_TIMEZONE:-}" ] && \
-    echo "date.timezone=${PHP_TIMEZONE}" >> "$php_ini"
-
-[ -n "${PHP_OPCACHE_ENABLE:-}" ] && \
-    echo "opcache.enable=${PHP_OPCACHE_ENABLE}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_ENABLE_CLI:-}" ] && \
-    echo "opcache.enable_cli=${PHP_OPCACHE_ENABLE_CLI}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_INTERNED_STRINGS_BUFFER:-}" ] && \
-    echo "opcache.interned_strings_buffer=${PHP_OPCACHE_INTERNED_STRINGS_BUFFER}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_MAX_ACCELERATED_FILES:-}" ] && \
-    echo "opcache.max_accelerated_files=${PHP_OPCACHE_MAX_ACCELERATED_FILES}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_REVALIDATE_FREQ:-}" ] && \
-    echo "opcache.revalidate_freq=${PHP_OPCACHE_REVALIDATE_FREQ}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_SAVE_COMMENTS:-}" ] && \
-    echo "opcache.save_comments=${PHP_OPCACHE_SAVE_COMMENTS}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_JIT:-}" ] && \
-    echo "opcache.jit=${PHP_OPCACHE_JIT}" >> "$php_ini"
-[ -n "${PHP_OPCACHE_JIT_BUFFER_SIZE:-}" ] && \
-    echo "opcache.jit_buffer_size=${PHP_OPCACHE_JIT_BUFFER_SIZE}" >> "$php_ini"
+emit_ini "$php_ini" date.timezone                    PHP_TIMEZONE
+emit_ini "$php_ini" opcache.enable                   PHP_OPCACHE_ENABLE
+emit_ini "$php_ini" opcache.enable_cli               PHP_OPCACHE_ENABLE_CLI
+emit_ini "$php_ini" opcache.interned_strings_buffer  PHP_OPCACHE_INTERNED_STRINGS_BUFFER
+emit_ini "$php_ini" opcache.max_accelerated_files    PHP_OPCACHE_MAX_ACCELERATED_FILES
+emit_ini "$php_ini" opcache.revalidate_freq          PHP_OPCACHE_REVALIDATE_FREQ
+emit_ini "$php_ini" opcache.save_comments            PHP_OPCACHE_SAVE_COMMENTS
+emit_ini "$php_ini" opcache.jit                      PHP_OPCACHE_JIT
+emit_ini "$php_ini" opcache.jit_buffer_size          PHP_OPCACHE_JIT_BUFFER_SIZE
 
 # --- FPM pool overrides -------------------------------------------------------
 
 fpm_header=0
-add_fpm() {
+emit_fpm() {
+    key=$1; var=$2
+    val=$(clean_val "$var")
+    if [ -z "$val" ]; then
+        eval "orig=\${$var-__UNSET__}"
+        if [ "$orig" != "__UNSET__" ] && [ -n "$orig" ]; then
+            echo "render-overrides: skipping ${key} — \$${var} is empty/whitespace/quotes-only after trim" >&2
+        fi
+        return 0
+    fi
     if [ "$fpm_header" -eq 0 ]; then
         echo "[www]" >> "$fpm_conf"
         fpm_header=1
     fi
-    echo "$1" >> "$fpm_conf"
+    echo "${key} = ${val}" >> "$fpm_conf"
 }
 
-[ -n "${FPM_PM:-}" ]                        && add_fpm "pm = ${FPM_PM}"
-[ -n "${FPM_PM_MAX_CHILDREN:-}" ]           && add_fpm "pm.max_children = ${FPM_PM_MAX_CHILDREN}"
-[ -n "${FPM_PM_START_SERVERS:-}" ]          && add_fpm "pm.start_servers = ${FPM_PM_START_SERVERS}"
-[ -n "${FPM_PM_MIN_SPARE_SERVERS:-}" ]      && add_fpm "pm.min_spare_servers = ${FPM_PM_MIN_SPARE_SERVERS}"
-[ -n "${FPM_PM_MAX_SPARE_SERVERS:-}" ]      && add_fpm "pm.max_spare_servers = ${FPM_PM_MAX_SPARE_SERVERS}"
-[ -n "${FPM_PM_MAX_REQUESTS:-}" ]           && add_fpm "pm.max_requests = ${FPM_PM_MAX_REQUESTS}"
-[ -n "${FPM_REQUEST_TERMINATE_TIMEOUT:-}" ] && add_fpm "request_terminate_timeout = ${FPM_REQUEST_TERMINATE_TIMEOUT}"
-[ -n "${FPM_REQUEST_SLOWLOG_TIMEOUT:-}" ]   && add_fpm "request_slowlog_timeout = ${FPM_REQUEST_SLOWLOG_TIMEOUT}"
-[ -n "${FPM_SLOWLOG:-}" ]                   && add_fpm "slowlog = ${FPM_SLOWLOG}"
+emit_fpm "pm"                          FPM_PM
+emit_fpm "pm.max_children"             FPM_PM_MAX_CHILDREN
+emit_fpm "pm.start_servers"            FPM_PM_START_SERVERS
+emit_fpm "pm.min_spare_servers"        FPM_PM_MIN_SPARE_SERVERS
+emit_fpm "pm.max_spare_servers"        FPM_PM_MAX_SPARE_SERVERS
+emit_fpm "pm.max_requests"             FPM_PM_MAX_REQUESTS
+emit_fpm "request_terminate_timeout"   FPM_REQUEST_TERMINATE_TIMEOUT
+emit_fpm "request_slowlog_timeout"     FPM_REQUEST_SLOWLOG_TIMEOUT
+emit_fpm "slowlog"                     FPM_SLOWLOG
 
 # --- Nginx overrides ---------------------------------------------------------
 
