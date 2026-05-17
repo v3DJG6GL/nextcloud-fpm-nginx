@@ -116,7 +116,34 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         fi
     fi
 
-    # 4. Run the chowns.
+    # 4. Log what we found so the boot log is self-explanatory.
+    #    Format mirrors the decision we're about to make; every field is
+    #    one of: "OK (matches)", "MISMATCH (was X:Y)", "MISSING".
+    sentinel_state() {
+        local path="$1"
+        if [ -z "$path" ]; then
+            printf 'MISSING (path unset)'
+        elif [ ! -e "$path" ]; then
+            printf 'MISSING (no such file)'
+        else
+            local got="$(stat -c '%u:%g' "$path")"
+            if [ "$got" = "${target_uid}:${target_gid}" ]; then
+                printf 'OK (%s matches)' "$got"
+            else
+                printf 'MISMATCH (was %s, target %s:%s)' "$got" "$target_uid" "$target_gid"
+            fi
+        fi
+    }
+    echo "entrypoint: ownership probe — target=${target_uid}:${target_gid}, data_dir=${data_dir:-<not configured>}" >&2
+    echo "entrypoint:   www  sentinel  $www_sentinel → $(sentinel_state "$www_sentinel")" >&2
+    config_php=/var/www/html/config/config.php
+    echo "entrypoint:   config (info)  $config_php → $(sentinel_state "$config_php")" >&2
+    if [ -n "$data_dir" ]; then
+        echo "entrypoint:   data sentinel  ${data_sentinel:-$data_dir/.ncdata (not found; tried .ocdata too)} → $(sentinel_state "$data_sentinel")" >&2
+    fi
+    echo "entrypoint: decision — www_needs_chown=$www_needs_chown, data_needs_chown=$data_needs_chown" >&2
+
+    # 5. Run the chowns.
     #
     # The KEY optimisation: if `data_dir` is nested under /var/www but its
     # sentinel says ownership is already correct, we PRUNE it from the
