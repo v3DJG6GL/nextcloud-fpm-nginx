@@ -16,6 +16,38 @@ load '../helpers/http.bash'
     assert_status_zero "$status"
 }
 
+# Real HTTP-level checks: the previous tests only grepped the config and would
+# pass even if the `types {}` block were placed inside `server {}` (which
+# REPLACES the inherited mime map and makes every static asset come back as
+# application/octet-stream — combined with X-Content-Type-Options: nosniff,
+# browsers refuse to execute the JS and the login form never mounts). See
+# nginx.conf http {} block.
+
+@test "served .js gets application/javascript (not octet-stream)" {
+    run nc_headers /core/js/oc.js
+    assert_status_zero "$status"
+    local ct
+    ct=$(header_value "$output" Content-Type)
+    [[ "$ct" == application/javascript* ]] \
+        || { log "expected application/javascript, got: $ct"; return 1; }
+}
+
+@test "served .css gets text/css (not octet-stream)" {
+    run nc_headers /core/css/server.css
+    assert_status_zero "$status"
+    local ct
+    ct=$(header_value "$output" Content-Type)
+    [[ "$ct" == text/css* ]] \
+        || { log "expected text/css, got: $ct"; return 1; }
+}
+
+@test "served .mjs gets text/javascript (the whole reason the types{} block exists)" {
+    # Use a guaranteed-present .mjs if any ship; otherwise check via nginx -T
+    # that the type is registered globally rather than only in server scope.
+    run compose_exec sh -c 'nginx -T 2>/dev/null | awk "/^http {/,/^}/" | grep -E "text/javascript .*mjs"'
+    assert_status_zero "$status" "text/javascript mjs mapping must be in http{} scope, not server{}"
+}
+
 @test "static assets get long Cache-Control via the immutable-asset block" {
     # Nextcloud's nginx reference applies Cache-Control: public, max-age=15778463
     # to css/js/svg/png/etc — verify the location ~ \.(css|js|svg|...) block routes
