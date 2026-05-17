@@ -108,7 +108,10 @@ for the full list — selected ones:
 | `MYSQL_HOST`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD[_FILE]` | MariaDB/MySQL connection |
 | `SQLITE_DATABASE` | Use SQLite (testing only) |
 | `REDIS_HOST`, `REDIS_HOST_PORT`, `REDIS_HOST_PASSWORD` | Distributed locking + memcache |
+| `REDIS_HOST_USER` | Redis 6+ ACL username (use with `REDIS_HOST_PASSWORD`) |
 | `OBJECTSTORE_S3_*`, `OBJECTSTORE_SWIFT_*` | Use object storage instead of local FS |
+| `NEXTCLOUD_INIT_HTACCESS` | Force `.htaccess` regen on every boot (Apache-only — usually leave unset for our nginx setup) |
+| `NEXTCLOUD_UPDATE` | Force the install/upgrade detection to re-run even when versions match |
 | `PHP_MEMORY_LIMIT` | `memory_limit` (default `512M`) |
 | `PHP_UPLOAD_LIMIT` | `upload_max_filesize` + `post_max_size` (default `512M`) |
 | `PHP_OPCACHE_MEMORY_CONSUMPTION` | `opcache.memory_consumption` (default `128`) |
@@ -170,6 +173,71 @@ Host user mapping (LSIO-style):
 Unsetting an env var on the next container start cleanly removes the
 corresponding override (the hook script rebuilds all override files from
 scratch each start).
+
+### Verifying what actually got applied
+
+Env-var-set ≠ rendered-config ≠ runtime-behavior. To prove a value
+landed where it counts, inspect what PHP-FPM **actually loaded** at
+runtime — not just what's in env or the rendered files.
+
+**`PHP_*` (opcache, timezone, memory limits):**
+
+```bash
+# Show every runtime PHP setting we expose, side-by-side with the
+# defaults. Output is what php-fpm workers will use for every request.
+docker exec nc php -r '
+$keys = [
+    "memory_limit", "upload_max_filesize", "post_max_size", "date.timezone",
+    "opcache.enable", "opcache.enable_cli",
+    "opcache.memory_consumption", "opcache.interned_strings_buffer",
+    "opcache.max_accelerated_files", "opcache.revalidate_freq",
+    "opcache.save_comments", "opcache.jit", "opcache.jit_buffer_size",
+];
+foreach ($keys as $k) {
+    printf("%-40s = %s\n", $k, ini_get($k));
+}
+'
+```
+
+If a `PHP_*` env var didn't take effect, the corresponding `ini_get`
+shows the upstream default and not your override. Use `php --ini` to
+see the load order of `.ini` files (later files in lexical order
+override earlier ones).
+
+**`FPM_*` (pool size, slowlog, timeouts):**
+
+PHP-FPM doesn't expose pool settings via `ini_get`. Two ways to verify:
+
+```bash
+# 1. What our entrypoint wrote based on the env vars:
+docker exec nc cat /usr/local/etc/php-fpm.d/zz-env.conf
+
+# 2. What php-fpm actually parsed at startup — its `-tt` flag dumps
+#    the merged effective config including every pool directive:
+docker exec nc php-fpm -tt 2>&1 \
+    | grep -E '^\[www\]|pm\.|request_(terminate|slowlog)|^slowlog' \
+    | head -30
+```
+
+Block #2 is the authoritative answer — those are the exact values
+php-fpm will use to spawn workers and time out requests, after merging
+the upstream defaults with our `zz-env.conf` overrides and any
+`zzz-local.conf` bind-mounts.
+
+If `FPM_PM_MAX_CHILDREN=20` appears in `zz-env.conf` (#1) but `php-fpm -tt`
+shows `pm.max_children = 5` (the default), something later in lexical
+order is overriding it — check for other `.conf` files in
+`/usr/local/etc/php-fpm.d/` with `ls /usr/local/etc/php-fpm.d/`.
+
+**Other layers** (PUID/PGID, NGINX, supervisord programs):
+
+```bash
+docker exec nc id www-data                                 # PUID/PGID actually applied
+docker exec nc grep -E '^\s*server_name' /etc/nginx/nginx.conf   # NGINX_SERVER_NAME
+docker exec nc cat /etc/nginx/conf.d/90-env-overrides.conf       # NGINX_HSTS
+docker exec nc supervisorctl status                              # NOTIFY_PUSH_ENABLE / NEXTCLOUD_CRON_ENABLE
+docker logs nc 2>&1 | grep -E 'entrypoint:'                      # PUID/PGID reassign banner
+```
 
 ## Bind-mount overrides
 
