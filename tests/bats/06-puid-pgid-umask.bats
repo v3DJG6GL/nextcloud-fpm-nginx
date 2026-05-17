@@ -318,6 +318,39 @@ teardown() {
     docker volume rm "$wwwvol" "$datavol" >/dev/null 2>&1 || true
 }
 
+# Regression for the 2026-05-17 multi-hour hang: modern shadow-utils'
+# `usermod -u` does an implicit recursive ownership update of the
+# user's home directory (/var/www) — happens INSIDE usermod, before
+# any of our sentinel logic gets to run. On a multi-TB HDD data
+# volume that's hours. The fix is to edit /etc/passwd directly via
+# sed (microseconds) and rely on our own sentinel-gated chown.
+@test "PUID change does NOT invoke usermod (which would do hidden recursive walk)" {
+    # The entrypoint script itself must not call the `usermod`/`groupmod`
+    # binaries when changing uid/gid. They're allowed to exist in the
+    # image (other things might want them), but our entrypoint must use
+    # direct file edits.
+    run docker exec "$NC_IMAGE_CTN" sh -c '
+        grep -E "^[[:space:]]*(usermod|groupmod)[[:space:]]" \
+            /usr/local/bin/container-entrypoint.sh || true
+    '
+    assert_status_zero "$status"
+    [ -z "$output" ] \
+        || { log "entrypoint still invokes usermod/groupmod (matches: $output)"; return 1; }
+}
+@test "PUID change logs the 'direct /etc/passwd edit' marker" {
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PUID=1600 -e PGID=1600 \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        "$NC_IMAGE" >/dev/null
+    sleep 4
+    run docker logs "$PUID_TEST_NAME"
+    assert_status_zero "$status"
+    assert_match "$output" 'direct /etc/passwd edit, no implicit recurse'
+    assert_match "$output" 'direct /etc/group edit, no implicit recurse'
+}
+
 @test "UMASK propagates to child processes" {
     docker run -d --name "$PUID_TEST_NAME" \
         -e UMASK=027 \

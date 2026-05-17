@@ -36,13 +36,33 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
     current_uid="$(id -u www-data)"
     current_gid="$(id -g www-data)"
 
+    # Direct /etc/passwd + /etc/group edits instead of usermod/groupmod.
+    #
+    # Modern shadow-utils' `usermod -u` does an IMPLICIT recursive
+    # ownership update of the user's home directory — even when only
+    # the uid is being changed and no `-m` flag is passed. www-data's
+    # home is /var/www, which on this image holds the entire NC webroot
+    # and (typically) the bind-mounted user data tree at
+    # /var/www/html/data. On a multi-TB HDD that walk is hours-to-days
+    # of disk I/O, and it happens INSIDE the usermod call — before our
+    # sentinel-gated chown logic gets to run. Net effect: our
+    # optimisation does nothing, every container recreation freezes
+    # for hours.
+    #
+    # The actual job — changing www-data's uid/gid — is two lines
+    # edited in /etc/passwd and /etc/group. Doing it via sed is
+    # microseconds and lets our explicit chown logic decide whether
+    # any disk traversal is warranted.
     if [ "$target_gid" != "$current_gid" ]; then
-        echo "entrypoint: groupmod www-data $current_gid -> $target_gid" >&2
-        groupmod -o -g "$target_gid" www-data
+        echo "entrypoint: groupmod www-data $current_gid -> $target_gid (direct /etc/group edit, no implicit recurse)" >&2
+        sed -i -E "s|^(www-data:[^:]*:)[0-9]+:|\\1${target_gid}:|" /etc/group
+        if [ -f /etc/gshadow ]; then
+            sed -i -E "s|^(www-data:[^:]*:)[0-9]*:|\\1${target_gid}:|" /etc/gshadow || true
+        fi
     fi
     if [ "$target_uid" != "$current_uid" ]; then
-        echo "entrypoint: usermod www-data $current_uid -> $target_uid" >&2
-        usermod -o -u "$target_uid" www-data
+        echo "entrypoint: usermod www-data $current_uid -> $target_uid (direct /etc/passwd edit, no implicit recurse)" >&2
+        sed -i -E "s|^(www-data:[^:]*:)[0-9]+:[0-9]+:|\\1${target_uid}:${target_gid}:|" /etc/passwd
     fi
 
     # --- Dual-sentinel-gated recursive chowns -----------------------------
