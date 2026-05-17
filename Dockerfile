@@ -35,7 +35,30 @@ COPY --chmod=0755 scripts/entrypoint.sh             /usr/local/bin/container-ent
 COPY --chmod=0755 scripts/render-overrides.sh       /usr/local/bin/render-overrides.sh
 COPY --chmod=0755 scripts/notify-push-wrapper.sh    /usr/local/bin/notify-push-wrapper.sh
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+# Best-practice pattern for containers with very-long first-boot init
+# (Docker 25.0+ added `--start-interval` exactly for this case — see
+# https://docs.docker.com/reference/dockerfile/#healthcheck):
+#
+#   --start-period=14400s (4 h)
+#     Generous grace window where failures don't count toward retries.
+#     Covers the one slow path that exists for real: a first-boot
+#     `chown -R /var/www` (+ external data dir) on a migrated multi-TB
+#     LSIO tree. Disk-bound storage routinely takes hours here (real
+#     reports of ~50 min for a few TB on HDD, still growing). Once the
+#     sentinels (version.php + .ncdata) match, the chown is skipped on
+#     every subsequent boot and the container is healthy in <60s.
+#   --start-interval=10s
+#     During start-period, check every 10s instead of the 30s default.
+#     The moment NC actually finishes booting, status.php responds and
+#     the container transitions from "starting" to "healthy" within
+#     seconds — no need to wait for the next 30-second interval tick.
+#   --interval=30s --timeout=5s --retries=3
+#     Normal post-startup behavior: a genuinely-broken NC is flagged
+#     unhealthy after 90s of failures.
+#
+# For multi-TB migrations where 4h isn't enough, override start_period
+# in compose, e.g.: `healthcheck: { start_period: 28800s }` (8h).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=14400s --start-interval=10s --retries=3 \
     CMD curl -fsS http://127.0.0.1/status.php 2>/dev/null \
         | grep -q '"installed":true' || exit 1
 
