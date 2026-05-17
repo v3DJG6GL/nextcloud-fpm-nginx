@@ -34,6 +34,22 @@ load '../helpers/compose.bash'
     assert_status_zero "$status"
 }
 
+# php-src #12343 — when nginx closes the FastCGI socket mid-stream,
+# PHP misreads ret==0 as clean EOF instead of truncation. With
+# fastcgi_request_buffering off + the default 60s fastcgi_send_timeout,
+# slow uplinks reliably trigger this on chunked DAV uploads. Long
+# timeouts (1h, matching client_body_timeout) keep the socket open
+# until the body actually arrives.
+@test "fastcgi_read_timeout 3600s (php-src #12343 truncation guard)" {
+    run compose_exec grep -E '^[[:space:]]*fastcgi_read_timeout[[:space:]]+3600s;' /etc/nginx/nginx.conf
+    assert_status_zero "$status"
+}
+
+@test "fastcgi_send_timeout 3600s (php-src #12343 truncation guard)" {
+    run compose_exec grep -E '^[[:space:]]*fastcgi_send_timeout[[:space:]]+3600s;' /etc/nginx/nginx.conf
+    assert_status_zero "$status"
+}
+
 @test "fastcgi_max_temp_file_size = 0 (no spooling to disk during upload)" {
     run compose_exec grep -E 'fastcgi_max_temp_file_size 0;' /etc/nginx/nginx.conf
     assert_status_zero "$status"
