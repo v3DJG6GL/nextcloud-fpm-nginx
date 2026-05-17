@@ -171,7 +171,7 @@ Host user mapping (LSIO-style):
 | `PGID` | Same for gid. | `33` |
 | `UMASK` | `umask` applied to the entrypoint and inherited by all child processes (php-fpm, nginx, cron, notify_push). | (unchanged) |
 
-**Caveat for `PUID` changes:** the first run with a new `PUID` will chown the entire `/var/www` tree. On a multi-TB data volume this can take hours. Subsequent restarts with the same `PUID` skip the chown (we detect uid match and bypass).
+**Caveat for `PUID` changes:** the first run with a new `PUID` chowns the entire `/var/www` tree. On a multi-TB data volume this can take hours. Subsequent boots — including container recreation after a `docker compose pull` + `up -d` — **skip the chown**: the entrypoint probes a sentinel file (`version.php`) and only walks the tree when the on-disk ownership actually differs from `PUID:PGID`. `groupmod`/`usermod` still run every fresh-container boot because `/etc/passwd` doesn't persist across container recreation; those are cheap (one-line edits).
 
 Unsetting an env var on the next container start cleanly removes the
 corresponding override (the hook script rebuilds all override files from
