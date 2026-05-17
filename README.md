@@ -132,19 +132,22 @@ PHP `.ini` overrides (written to `/usr/local/etc/php/conf.d/zz-env-overrides.ini
 | `PHP_OPCACHE_JIT` | `opcache.jit` | `1255` (upstream) |
 | `PHP_OPCACHE_JIT_BUFFER_SIZE` | `opcache.jit_buffer_size` | `8M` (upstream) |
 
-FPM pool overrides (written to `/usr/local/etc/php-fpm.d/zz-env.conf`):
+FPM pool overrides (written to `/usr/local/etc/php-fpm.d/zz-env.conf`).
+Defaults are the upstream `php:fpm` `www.conf` values shipped in the
+image — they're conservative and suited only to small/test installs;
+production deployments will want to bump at least `FPM_PM_MAX_CHILDREN`:
 
-| Variable | Maps to |
-|---|---|
-| `FPM_PM` | `pm` (`dynamic`/`static`/`ondemand`) |
-| `FPM_PM_MAX_CHILDREN` | `pm.max_children` |
-| `FPM_PM_START_SERVERS` | `pm.start_servers` |
-| `FPM_PM_MIN_SPARE_SERVERS` | `pm.min_spare_servers` |
-| `FPM_PM_MAX_SPARE_SERVERS` | `pm.max_spare_servers` |
-| `FPM_PM_MAX_REQUESTS` | `pm.max_requests` |
-| `FPM_REQUEST_TERMINATE_TIMEOUT` | `request_terminate_timeout` |
-| `FPM_REQUEST_SLOWLOG_TIMEOUT` | `request_slowlog_timeout` |
-| `FPM_SLOWLOG` | `slowlog` (path) |
+| Variable | Maps to | Default |
+|---|---|---|
+| `FPM_PM` | `pm` (`dynamic`/`static`/`ondemand`) | `dynamic` |
+| `FPM_PM_MAX_CHILDREN` | `pm.max_children` | `5` |
+| `FPM_PM_START_SERVERS` | `pm.start_servers` | `2` |
+| `FPM_PM_MIN_SPARE_SERVERS` | `pm.min_spare_servers` | `1` |
+| `FPM_PM_MAX_SPARE_SERVERS` | `pm.max_spare_servers` | `3` |
+| `FPM_PM_MAX_REQUESTS` | `pm.max_requests` (0 = no limit) | `0` |
+| `FPM_REQUEST_TERMINATE_TIMEOUT` | `request_terminate_timeout` (0 = no limit) | `0s` |
+| `FPM_REQUEST_SLOWLOG_TIMEOUT` | `request_slowlog_timeout` (0 = disabled) | `0s` |
+| `FPM_SLOWLOG` | `slowlog` (path; required if `FPM_REQUEST_SLOWLOG_TIMEOUT > 0`) | unset |
 
 Nginx tweaks:
 
