@@ -242,6 +242,27 @@ jobs:
           - { id: mysql-redis-nopush-cron-sidecar,     db: mysql,    redis: 'true',  notify_push: 'false', cron: sidecar     }
         # 2 majors × 15 scenarios = 30 matrix cells
     steps:
+      # Reclaim ~25 GiB of preinstalled toolchains we don't use (Android SDK,
+      # .NET, Haskell, large apt packages, pre-pulled Docker images). GH-hosted
+      # ubuntu-latest only guarantees ~14 GiB free, which the heaviest matrix
+      # cells eat through: nextcloud:<ver>-fpm base (~1.4 GiB) + our derived
+      # image (~1.5 GiB) + MariaDB/Postgres + Redis + the Nextcloud install
+      # data volume. `mysql-redis-nopush-cron-incontainer` is where it first
+      # ran us into "Free space left: 65 MB".
+      # Keeping swap-storage (PHP/NC install spike RAM) and tool-cache
+      # (some actions resolve node from /opt/hostedtoolcache).
+      # Pinned to v1.3.1 == main HEAD as of 2024-08; GPG-verified commit.
+      - name: Free disk space on runner
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          android: 'true'
+          dotnet: 'true'
+          haskell: 'true'
+          large-packages: 'true'
+          docker-images: 'true'
+          swap-storage: 'false'
+          tool-cache: 'false'
+
       - uses: actions/checkout@v6
 
       - uses: docker/setup-buildx-action@v4
