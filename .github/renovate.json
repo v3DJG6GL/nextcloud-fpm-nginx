@@ -30,6 +30,12 @@
       "description": "Standalone bumps for tool versions tracked in build.yml (crane, etc.).",
       "matchDatasources": ["github-releases", "github-tags"],
       "matchFileNames": [".github/workflows/**"]
+    },
+    {
+      "description": "Major bumps require manual review — surface as checkboxes on the Dependency Dashboard, do not open the PR automatically, do not auto-merge. Minor/patch still flow through automerge gated by all-ci.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "dependencyDashboardApproval": true
     }
   ]
 }
