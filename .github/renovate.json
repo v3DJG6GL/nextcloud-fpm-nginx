@@ -8,7 +8,6 @@
     ":dependencyDashboard"
   ],
   "timezone": "Etc/UTC",
-  "schedule": ["before 06:00 on monday"],
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
   "automerge": true,
