@@ -27,19 +27,18 @@ on:
         type: boolean
         default: false
   schedule:
-    # 06:00 + 18:00 UTC — digest-drift gate, 2x/day. Picks up versions.json
-    # bumps and in-place upstream rebuilds of nextcloud:<ver>-fpm (Debian/PHP
-    # CVEs). The two slots are 12h apart so the worst-case detection latency
-    # for an upstream rebuild is ~12h regardless of TZ. A run where nothing
-    # has drifted is a ~30s no-op.
+    # 06:00 + 18:00 UTC — every scheduled run applies BOTH gates:
+    #   digest-drift gate → picks up versions.json bumps and in-place upstream
+    #     rebuilds of nextcloud:<ver>-fpm (Debian/PHP CVEs).
+    #   staleness gate    → if a major's published image is >=14d old AND
+    #     hasn't been picked up by the digest gate (upstream hasn't rebuilt
+    #     the base recently either), force a no-cache rebuild so transitive
+    #     apt deps (libssl, pcre, zlib, …) get re-resolved against current
+    #     Debian repos. Running this check daily (instead of on a fixed
+    #     weekday) means rebuild fires within 24h of age crossing 14d,
+    #     instead of up to 7d later.
+    # A run where nothing has drifted AND nothing is stale is a ~30s no-op.
     - cron: '0 6,18 * * *'
-    # Weekly Sunday 07:00 UTC — staleness gate. For any major whose published
-    # image is >=14 days old AND hasn't been picked up by the digest gate
-    # (i.e., upstream hasn't rebuilt the base recently either), force a
-    # no-cache rebuild so transitive apt deps (libssl, pcre, zlib, …) get
-    # re-resolved against the current Debian repos. The 1h offset from the
-    # daily cron prevents overlap.
-    - cron: '0 7 * * 0'
 
 # Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
 # in-flight publishes to ghcr.io).
@@ -86,12 +85,10 @@ jobs:
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
           FORCE: ${{ github.event.inputs.force }}
           OWNER: ${{ github.repository_owner }}
           IMAGE: nextcloud-fpm-nginx
           STALENESS_DAYS: '14'
-          WEEKLY_CRON: '0 7 * * 0'
         run: |
           set -euo pipefail
 
@@ -124,31 +121,19 @@ jobs:
           # ── Gate selection ───────────────────────────────────────────────
           # push / pull_request  → full matrix (paths filter already gated)
           # workflow_dispatch    → full matrix when force=true, else gates apply
-          # schedule (daily)     → digest gate
-          # schedule (weekly)    → digest gate + staleness gate (no-cache rebuild
-          #                         for majors whose image is >=14d old AND
-          #                         haven't already drifted)
+          # schedule             → both gates apply
           # ─────────────────────────────────────────────────────────────────
-          apply_digest_gate=no
-          apply_staleness_gate=no
+          apply_gates=no
           case "$EVENT" in
-            schedule)
-              apply_digest_gate=yes
-              [ "$SCHEDULE" = "$WEEKLY_CRON" ] && apply_staleness_gate=yes
-              ;;
-            workflow_dispatch)
-              if [ "$FORCE" != "true" ]; then
-                apply_digest_gate=yes
-                apply_staleness_gate=yes
-              fi
-              ;;
+            schedule) apply_gates=yes ;;
+            workflow_dispatch) [ "$FORCE" = "true" ] || apply_gates=yes ;;
           esac
 
-          if [ "$apply_digest_gate" = "no" ]; then
+          if [ "$apply_gates" = "no" ]; then
             builds=$(cat full-builds.json)
             echo "No gate applied (event=$EVENT) — building full matrix."
           else
-            echo "Applying gates: digest=$apply_digest_gate staleness=$apply_staleness_gate"
+            echo "Applying gates: digest-drift + staleness (>=${STALENESS_DAYS}d)"
             filtered='[]'
             now_epoch=$(date +%s)
             while IFS= read -r row; do
@@ -185,7 +170,7 @@ jobs:
               # anyway, so no-cache would be redundant). Force no-cache for
               # any major whose published image hasn't been refreshed in
               # STALENESS_DAYS — refreshes transitive apt deps (libssl etc.).
-              if [ -z "$keep_reason" ] && [ "$apply_staleness_gate" = "yes" ] && [ -n "${our_cfg:-}" ]; then
+              if [ -z "$keep_reason" ] && [ -n "${our_cfg:-}" ]; then
                 created=$(jq -r '.config.Labels["org.opencontainers.image.created"] // empty' <<<"$our_cfg")
                 if [ -z "$created" ]; then
                   keep_reason="created-label-missing (treat as stale)"
