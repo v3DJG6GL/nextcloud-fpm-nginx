@@ -27,10 +27,12 @@ on:
         type: boolean
         default: false
   schedule:
-    # Daily 06:00 UTC — digest-drift gate. Picks up versions.json bumps and
-    # in-place upstream rebuilds of nextcloud:<ver>-fpm (Debian/PHP CVEs).
-    # A run where nothing has drifted is a ~30s no-op.
-    - cron: '0 6 * * *'
+    # 06:00 + 18:00 UTC — digest-drift gate, 2x/day. Picks up versions.json
+    # bumps and in-place upstream rebuilds of nextcloud:<ver>-fpm (Debian/PHP
+    # CVEs). The two slots are 12h apart so the worst-case detection latency
+    # for an upstream rebuild is ~12h regardless of TZ. A run where nothing
+    # has drifted is a ~30s no-op.
+    - cron: '0 6,18 * * *'
     # Weekly Sunday 07:00 UTC — staleness gate. For any major whose published
     # image is >=14 days old AND hasn't been picked up by the digest gate
     # (i.e., upstream hasn't rebuilt the base recently either), force a
