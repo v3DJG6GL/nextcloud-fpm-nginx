@@ -34,7 +34,7 @@ RUN set -eux; \
         aarch64) rust_arch=aarch64 ;; \
         *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /usr/local/bin/notify_push \
+    curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors -o /usr/local/bin/notify_push \
         "https://github.com/nextcloud/notify_push/releases/download/v${NOTIFY_PUSH_VERSION}/notify_push-${rust_arch}-unknown-linux-musl"; \
     chmod 0755 /usr/local/bin/notify_push; \
     /usr/local/bin/notify_push --version
