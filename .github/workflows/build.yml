@@ -51,6 +51,8 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  # mikepenz/action-junit-report posts bats failures as per-cell check-runs.
+  checks: write
 
 jobs:
   compute-matrix:
