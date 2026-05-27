@@ -21,8 +21,16 @@ on:
       - .github/workflows/build.yml
       - .github/versions-blocklist.txt
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force rebuild every non-blocklisted major (bypass base-digest gate)'
+        type: boolean
+        default: false
   schedule:
-    # Daily 06:00 UTC — picks up new upstream Nextcloud patch releases.
+    # Daily 06:00 UTC. The compute-matrix job applies a base-digest gate, so a
+    # cron run with no upstream change is a ~30s no-op — actual build work only
+    # happens when versions.json bumps OR upstream rebuilds nextcloud:<ver>-fpm
+    # in place (Debian/PHP CVE refresh; ~monthly cadence in practice).
     - cron: '0 6 * * *'
 
 # Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
@@ -47,8 +55,31 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install crane
+        env:
+          CRANE_VERSION: v0.20.2
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      - name: Log crane in to ghcr.io
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$TOKEN" | crane auth login ghcr.io \
+            --username "${{ github.actor }}" \
+            --password-stdin
+
       - id: set
         shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          FORCE: ${{ github.event.inputs.force }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE: nextcloud-fpm-nginx
         run: |
           set -euo pipefail
 
@@ -70,15 +101,83 @@ jobs:
             | [ to_entries[]
                 | select(.key as $k | $b | index($k) | not)
                 | { major: .key, version: .value.version } ]
-          ' versions.json > builds.json
+          ' versions.json > full-builds.json
 
-          echo "Builds:"
-          cat builds.json | jq
+          echo "Candidate builds (pre-gate):"
+          jq . full-builds.json
 
-          latest=$(jq -r 'map(.major | tonumber) | max' builds.json)
+          latest=$(jq -r 'map(.major | tonumber) | max' full-builds.json)
           echo "Latest non-blocked major: $latest"
 
-          echo "builds=$(cat builds.json)" >> "$GITHUB_OUTPUT"
+          # Base-digest gate.
+          #
+          # On push/PR the user changed something in the repo (paths filter
+          # already gates this), so we run the full matrix. On schedule (and
+          # on workflow_dispatch unless `force=true`) we skip any major whose
+          # already-published image is FROM the current upstream base digest.
+          #
+          # The gate compares two values:
+          #   upstream = `crane digest nextcloud:<ver>-fpm`
+          #   ours     = label `org.opencontainers.image.base.digest` on
+          #              ghcr.io/<owner>/nextcloud-fpm-nginx:v<ver>
+          # Rebuild reasons (any one triggers build):
+          #   * ghcr tag missing (never built this version)
+          #   * label missing (built before this gate existed; rebuild populates it)
+          #   * digests differ (upstream refreshed Debian/PHP layers, or NC bumped)
+          # Failure to resolve upstream digest is fail-open (rebuild) — a
+          # transient registry hiccup must never silently leave us on a
+          # stale base.
+          gate=no
+          case "$EVENT" in
+            schedule) gate=yes ;;
+            workflow_dispatch) [ "$FORCE" = "true" ] || gate=yes ;;
+          esac
+
+          if [ "$gate" = "yes" ]; then
+            echo "Applying base-digest gate..."
+            filtered='[]'
+            while IFS= read -r row; do
+              major=$(jq -r '.major' <<<"$row")
+              version=$(jq -r '.version' <<<"$row")
+              ghcr_ref="ghcr.io/${OWNER}/${IMAGE}:v${version}"
+              upstream_ref="docker.io/library/nextcloud:${version}-fpm"
+
+              keep_reason=""
+
+              upstream_digest=$(crane digest "$upstream_ref" 2>/dev/null || true)
+              if [ -z "$upstream_digest" ]; then
+                echo "::warning::[$major] could not resolve $upstream_ref — including in build (fail-open)"
+                keep_reason="upstream-resolve-failed"
+              else
+                our_cfg=$(crane config "$ghcr_ref" 2>/dev/null || true)
+                if [ -z "$our_cfg" ]; then
+                  keep_reason="ghcr-tag-missing"
+                else
+                  our_digest=$(jq -r '.config.Labels["org.opencontainers.image.base.digest"] // empty' <<<"$our_cfg")
+                  if [ -z "$our_digest" ]; then
+                    keep_reason="base-digest-label-missing"
+                  elif [ "$our_digest" != "$upstream_digest" ]; then
+                    keep_reason="base-digest-drift ($our_digest -> $upstream_digest)"
+                  fi
+                fi
+              fi
+
+              if [ -n "$keep_reason" ]; then
+                echo "[$major] REBUILD: $keep_reason"
+                filtered=$(jq -c --argjson r "$row" '. + [$r]' <<<"$filtered")
+              else
+                echo "[$major] skip — up to date ($upstream_digest)"
+              fi
+            done < <(jq -c '.[]' full-builds.json)
+            builds="$filtered"
+          else
+            builds=$(cat full-builds.json)
+          fi
+
+          echo "Final builds:"
+          echo "$builds" | jq
+
+          echo "builds=$builds" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
 
   # ─── amd64 test (Pattern A: build → load → test → only-then-push) ───
@@ -90,6 +189,8 @@ jobs:
   test:
     name: Test (amd64) — ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
     needs: compute-matrix
+    # Skip cleanly when the base-digest gate filtered every major (cron no-op).
+    if: needs.compute-matrix.outputs.builds != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -178,6 +279,7 @@ jobs:
   test-arm64-smoke:
     name: Smoke (arm64) — ${{ matrix.build.major }}
     needs: compute-matrix
+    if: needs.compute-matrix.outputs.builds != '[]'
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
@@ -237,14 +339,24 @@ jobs:
       - name: Verify all required jobs succeeded
         run: |
           set -euo pipefail
+          # `skipped` is acceptable on test/test-arm64-smoke: the compute-matrix
+          # gate may filter every major on a cron run when nothing upstream
+          # changed. compute-matrix itself must always succeed (it's the gate).
+          if [ "${{ needs.compute-matrix.result }}" != success ]; then
+            echo "::error::compute-matrix=${{ needs.compute-matrix.result }}"
+            exit 1
+          fi
           fail=0
-          for r in '${{ needs.compute-matrix.result }}' \
-                   '${{ needs.test.result }}' \
-                   '${{ needs.test-arm64-smoke.result }}'; do
-            [ "$r" = success ] || fail=1
+          for r in 'test=${{ needs.test.result }}' \
+                   'test-arm64-smoke=${{ needs.test-arm64-smoke.result }}'; do
+            val="${r#*=}"
+            case "$val" in
+              success|skipped) ;;
+              *) fail=1 ;;
+            esac
           done
           if [ "$fail" -ne 0 ]; then
-            echo "::error::compute-matrix=${{ needs.compute-matrix.result }}, test=${{ needs.test.result }}, test-arm64-smoke=${{ needs.test-arm64-smoke.result }}"
+            echo "::error::test=${{ needs.test.result }}, test-arm64-smoke=${{ needs.test-arm64-smoke.result }}"
             exit 1
           fi
 
@@ -256,8 +368,9 @@ jobs:
     name: Build & push — v${{ matrix.build.version }}
     # Skip pushes on PRs — dependabot PRs are untrusted with packages: write,
     # and we don't want PR builds clobbering published tags. The push runs on
-    # the merge commit (push to master) instead.
-    if: github.event_name != 'pull_request'
+    # the merge commit (push to master) instead. Also skip when the gate
+    # filtered every major (nothing to rebuild).
+    if: github.event_name != 'pull_request' && needs.compute-matrix.outputs.builds != '[]'
     needs: [compute-matrix, test, test-arm64-smoke]
     runs-on: ubuntu-latest
     strategy:
@@ -286,6 +399,28 @@ jobs:
             type=raw,value=v${{ matrix.build.major }}
             type=raw,value=latest,enable=${{ matrix.build.major == needs.compute-matrix.outputs.latest }}
 
+      # Resolve the upstream FROM-image digest right before build, and bake it
+      # into the published image as `org.opencontainers.image.base.digest`.
+      # The compute-matrix gate reads this label on the next run to decide
+      # whether the base has drifted. `pull: true` on build-push-action below
+      # forces buildx to pull the latest manifest, so the digest captured here
+      # matches what the build actually uses (within a tiny race window — any
+      # repush in those seconds just causes one extra rebuild next run).
+      - id: base
+        name: Resolve upstream base digest
+        env:
+          CRANE_VERSION: v0.20.2
+          NC_VERSION: ${{ matrix.build.version }}
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+          base_name="docker.io/library/nextcloud:${NC_VERSION}-fpm"
+          base_digest=$(crane digest "$base_name")
+          echo "base_name=$base_name"     >> "$GITHUB_OUTPUT"
+          echo "base_digest=$base_digest" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -295,7 +430,10 @@ jobs:
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.base.name=${{ steps.base.outputs.base_name }}
+            org.opencontainers.image.base.digest=${{ steps.base.outputs.base_digest }}
           provenance: true
           sbom: true
           cache-from: |
