@@ -23,15 +23,21 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force rebuild every non-blocklisted major (bypass base-digest gate)'
+        description: 'Force rebuild every non-blocklisted major (bypass digest + staleness gates)'
         type: boolean
         default: false
   schedule:
-    # Daily 06:00 UTC. The compute-matrix job applies a base-digest gate, so a
-    # cron run with no upstream change is a ~30s no-op — actual build work only
-    # happens when versions.json bumps OR upstream rebuilds nextcloud:<ver>-fpm
-    # in place (Debian/PHP CVE refresh; ~monthly cadence in practice).
+    # Daily 06:00 UTC — digest-drift gate. Picks up versions.json bumps and
+    # in-place upstream rebuilds of nextcloud:<ver>-fpm (Debian/PHP CVEs).
+    # A run where nothing has drifted is a ~30s no-op.
     - cron: '0 6 * * *'
+    # Weekly Sunday 07:00 UTC — staleness gate. For any major whose published
+    # image is >=14 days old AND hasn't been picked up by the digest gate
+    # (i.e., upstream hasn't rebuilt the base recently either), force a
+    # no-cache rebuild so transitive apt deps (libssl, pcre, zlib, …) get
+    # re-resolved against the current Debian repos. The 1h offset from the
+    # daily cron prevents overlap.
+    - cron: '0 7 * * 0'
 
 # Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
 # in-flight publishes to ghcr.io).
@@ -57,6 +63,7 @@ jobs:
 
       - name: Install crane
         env:
+          # renovate: datasource=github-releases depName=google/go-containerregistry
           CRANE_VERSION: v0.20.2
         run: |
           set -euo pipefail
@@ -77,9 +84,12 @@ jobs:
         shell: bash
         env:
           EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
           FORCE: ${{ github.event.inputs.force }}
           OWNER: ${{ github.repository_owner }}
           IMAGE: nextcloud-fpm-nginx
+          STALENESS_DAYS: '14'
+          WEEKLY_CRON: '0 7 * * 0'
         run: |
           set -euo pipefail
 
@@ -100,7 +110,7 @@ jobs:
             ($block | split(",") | map(select(. != ""))) as $b
             | [ to_entries[]
                 | select(.key as $k | $b | index($k) | not)
-                | { major: .key, version: .value.version } ]
+                | { major: .key, version: .value.version, no_cache: false } ]
           ' versions.json > full-builds.json
 
           echo "Candidate builds (pre-gate):"
@@ -109,33 +119,36 @@ jobs:
           latest=$(jq -r 'map(.major | tonumber) | max' full-builds.json)
           echo "Latest non-blocked major: $latest"
 
-          # Base-digest gate.
-          #
-          # On push/PR the user changed something in the repo (paths filter
-          # already gates this), so we run the full matrix. On schedule (and
-          # on workflow_dispatch unless `force=true`) we skip any major whose
-          # already-published image is FROM the current upstream base digest.
-          #
-          # The gate compares two values:
-          #   upstream = `crane digest nextcloud:<ver>-fpm`
-          #   ours     = label `org.opencontainers.image.base.digest` on
-          #              ghcr.io/<owner>/nextcloud-fpm-nginx:v<ver>
-          # Rebuild reasons (any one triggers build):
-          #   * ghcr tag missing (never built this version)
-          #   * label missing (built before this gate existed; rebuild populates it)
-          #   * digests differ (upstream refreshed Debian/PHP layers, or NC bumped)
-          # Failure to resolve upstream digest is fail-open (rebuild) — a
-          # transient registry hiccup must never silently leave us on a
-          # stale base.
-          gate=no
+          # ── Gate selection ───────────────────────────────────────────────
+          # push / pull_request  → full matrix (paths filter already gated)
+          # workflow_dispatch    → full matrix when force=true, else gates apply
+          # schedule (daily)     → digest gate
+          # schedule (weekly)    → digest gate + staleness gate (no-cache rebuild
+          #                         for majors whose image is >=14d old AND
+          #                         haven't already drifted)
+          # ─────────────────────────────────────────────────────────────────
+          apply_digest_gate=no
+          apply_staleness_gate=no
           case "$EVENT" in
-            schedule) gate=yes ;;
-            workflow_dispatch) [ "$FORCE" = "true" ] || gate=yes ;;
+            schedule)
+              apply_digest_gate=yes
+              [ "$SCHEDULE" = "$WEEKLY_CRON" ] && apply_staleness_gate=yes
+              ;;
+            workflow_dispatch)
+              if [ "$FORCE" != "true" ]; then
+                apply_digest_gate=yes
+                apply_staleness_gate=yes
+              fi
+              ;;
           esac
 
-          if [ "$gate" = "yes" ]; then
-            echo "Applying base-digest gate..."
+          if [ "$apply_digest_gate" = "no" ]; then
+            builds=$(cat full-builds.json)
+            echo "No gate applied (event=$EVENT) — building full matrix."
+          else
+            echo "Applying gates: digest=$apply_digest_gate staleness=$apply_staleness_gate"
             filtered='[]'
+            now_epoch=$(date +%s)
             while IFS= read -r row; do
               major=$(jq -r '.major' <<<"$row")
               version=$(jq -r '.version' <<<"$row")
@@ -143,7 +156,10 @@ jobs:
               upstream_ref="docker.io/library/nextcloud:${version}-fpm"
 
               keep_reason=""
+              no_cache=false
 
+              # Digest-gate: failure to resolve upstream is fail-open (rebuild)
+              # so a registry hiccup never silently leaves us on a stale base.
               upstream_digest=$(crane digest "$upstream_ref" 2>/dev/null || true)
               if [ -z "$upstream_digest" ]; then
                 echo "::warning::[$major] could not resolve $upstream_ref — including in build (fail-open)"
@@ -162,16 +178,39 @@ jobs:
                 fi
               fi
 
+              # Staleness-gate: only run when no digest-rebuild already queued
+              # (a digest rebuild naturally invalidates the cached apt layer
+              # anyway, so no-cache would be redundant). Force no-cache for
+              # any major whose published image hasn't been refreshed in
+              # STALENESS_DAYS — refreshes transitive apt deps (libssl etc.).
+              if [ -z "$keep_reason" ] && [ "$apply_staleness_gate" = "yes" ] && [ -n "${our_cfg:-}" ]; then
+                created=$(jq -r '.config.Labels["org.opencontainers.image.created"] // empty' <<<"$our_cfg")
+                if [ -z "$created" ]; then
+                  keep_reason="created-label-missing (treat as stale)"
+                  no_cache=true
+                else
+                  created_epoch=$(date -d "$created" +%s 2>/dev/null || echo 0)
+                  age_days=$(( (now_epoch - created_epoch) / 86400 ))
+                  if [ "$created_epoch" -gt 0 ] && [ "$age_days" -ge "$STALENESS_DAYS" ]; then
+                    keep_reason="staleness ${age_days}d >= ${STALENESS_DAYS}d"
+                    no_cache=true
+                  fi
+                fi
+              fi
+
               if [ -n "$keep_reason" ]; then
-                echo "[$major] REBUILD: $keep_reason"
-                filtered=$(jq -c --argjson r "$row" '. + [$r]' <<<"$filtered")
+                echo "[$major] REBUILD (no_cache=$no_cache): $keep_reason"
+                filtered=$(jq -c \
+                  --arg major   "$major" \
+                  --arg version "$version" \
+                  --argjson nc  "$no_cache" \
+                  '. + [{ major: $major, version: $version, no_cache: $nc }]' \
+                  <<<"$filtered")
               else
-                echo "[$major] skip — up to date ($upstream_digest)"
+                echo "[$major] skip — up to date"
               fi
             done < <(jq -c '.[]' full-builds.json)
             builds="$filtered"
-          else
-            builds=$(cat full-builds.json)
           fi
 
           echo "Final builds:"
@@ -409,6 +448,7 @@ jobs:
       - id: base
         name: Resolve upstream base digest
         env:
+          # renovate: datasource=github-releases depName=google/go-containerregistry
           CRANE_VERSION: v0.20.2
           NC_VERSION: ${{ matrix.build.version }}
         run: |
@@ -427,6 +467,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           pull: true
+          # no-cache=true skips ALL build cache. Set by the staleness branch of
+          # the compute-matrix gate (weekly cron, image >=14d old) so apt
+          # re-resolves transitive deps (libssl, pcre, zlib, …) against the
+          # current Debian repos. Digest-drift rebuilds leave this false — the
+          # cache is naturally invalidated by the new parent layer anyway.
+          no-cache: ${{ matrix.build.no_cache }}
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
           tags: ${{ steps.meta.outputs.tags }}

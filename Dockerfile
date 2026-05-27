@@ -3,11 +3,21 @@ FROM nextcloud:${NC_VERSION}-fpm
 
 USER root
 
+# nginx & supervisor are pinned to exact Debian (Trixie) versions so Renovate
+# can open a PR the moment Debian publishes a security update — see
+# .github/renovate.json (Repology datasource, debian_13/<pkg>). The PR merging
+# is what triggers a rebuild for these packages; transitive deps (libssl etc.)
+# are refreshed by the staleness branch of the daily compute-matrix gate.
+# renovate: datasource=repology depName=debian_13/nginx versioning=loose
+ARG NGINX_VERSION=1.26.3-3+deb13u5
+# renovate: datasource=repology depName=debian_13/supervisor versioning=loose
+ARG SUPERVISOR_VERSION=4.2.5-3
+
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        nginx \
-        supervisor \
+        nginx=${NGINX_VERSION} \
+        supervisor=${SUPERVISOR_VERSION} \
     ; \
     rm -rf /var/lib/apt/lists/*; \
     ln -sf /dev/stdout /var/log/nginx/access.log; \

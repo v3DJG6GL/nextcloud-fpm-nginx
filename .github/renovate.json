@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "customManagers:dockerfileVersions",
+    "customManagers:githubActionsVersions",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Etc/UTC",
+  "schedule": ["before 06:00 on monday"],
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "automerge": true,
+  "automergeStrategy": "squash",
+  "platformAutomerge": true,
+  "ignoreDeps": ["nextcloud"],
+  "packageRules": [
+    {
+      "description": "Group all GitHub Actions bumps into one PR.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Group all Debian apt-package bumps into one PR. The custom Dockerfile manager picks these up from `# renovate: datasource=repology depName=debian_13/<pkg>` markers.",
+      "matchDatasources": ["repology"],
+      "groupName": "debian-apt"
+    },
+    {
+      "description": "Standalone bumps for tool versions tracked in build.yml (crane, etc.).",
+      "matchDatasources": ["github-releases", "github-tags"],
+      "matchFileNames": [".github/workflows/**"]
+    }
+  ]
+}
