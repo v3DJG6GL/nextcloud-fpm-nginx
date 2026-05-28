@@ -258,7 +258,11 @@ jobs:
           android: 'true'
           dotnet: 'true'
           haskell: 'true'
-          large-packages: 'true'
+          # large-packages MUST stay false: it removes `php.*` from the host,
+          # and tests/bats/28-config-drift.bats:24 runs `php -l` on the host
+          # to syntax-check a fixture file (exit 127 = command not found).
+          # Keeping it off costs ~5.3 GiB of reclaim, leaves us still ~20 GiB.
+          large-packages: 'false'
           docker-images: 'true'
           swap-storage: 'false'
           tool-cache: 'false'
