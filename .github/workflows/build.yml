@@ -3,23 +3,24 @@ name: build
 on:
   push:
     branches: [main, master]
+    # Paths filter on push only — saves a full-matrix run on the squash-merge
+    # commits whose touched files don't actually affect the image (READMEs,
+    # docs, etc.). compose.yaml is included because Renovate bumps the test
+    # services (postgres / redis / mariadb tags) there.
     paths:
       - Dockerfile
       - nginx.conf
       - supervisord.conf
       - scripts/**
       - tests/**
+      - compose.yaml
       - .github/workflows/build.yml
       - .github/versions-blocklist.txt
+  # No paths filter on pull_request — every PR must run the full matrix so
+  # the required `all-ci` check actually reports. Otherwise PRs that touch
+  # files outside the push filter (compose.yaml, renovate.json, README, …)
+  # stay BLOCKED forever waiting for a status check that never runs.
   pull_request:
-    paths:
-      - Dockerfile
-      - nginx.conf
-      - supervisord.conf
-      - scripts/**
-      - tests/**
-      - .github/workflows/build.yml
-      - .github/versions-blocklist.txt
   workflow_dispatch:
     inputs:
       force:
