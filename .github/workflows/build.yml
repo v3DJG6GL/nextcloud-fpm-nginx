@@ -118,6 +118,58 @@ jobs:
           echo "Candidate builds (pre-gate):"
           jq . full-builds.json
 
+          # ── Base-image existence pre-filter (all events) ─────────────────
+          # versions.json is bumped by upstream nextcloud/docker BEFORE the
+          # matching nextcloud:<ver>-fpm image is published to Docker Hub —
+          # a multi-hour race. Building FROM a not-yet-published base fails
+          # the whole cell ("not found"). Drop a major only when its base tag
+          # is GENUINELY absent (registry says MANIFEST_UNKNOWN / 404); on a
+          # transient error keep it (fail-open) so a hiccup never silently
+          # narrows the matrix. The next scheduled run's digest gate picks the
+          # major back up automatically once the tag lands.
+          base_status() {
+            # 0 = exists, 1 = genuinely absent, 2 = undetermined (transient)
+            local ref="$1" out
+            local attempt
+            for attempt in 1 2 3; do
+              if out=$(crane digest "$ref" 2>&1); then
+                return 0
+              fi
+              if printf '%s' "$out" | grep -qiE 'MANIFEST_UNKNOWN|NAME_UNKNOWN|not found|404'; then
+                return 1
+              fi
+              sleep $(( attempt * 3 ))
+            done
+            return 2
+          }
+
+          echo "Verifying upstream base images are published…"
+          published='[]'
+          while IFS= read -r row; do
+            major=$(jq -r '.major' <<<"$row")
+            version=$(jq -r '.version' <<<"$row")
+            ref="docker.io/library/nextcloud:${version}-fpm"
+            if base_status "$ref"; then
+              published=$(jq -c --argjson r "$row" '. + [$r]' <<<"$published")
+            elif [ $? -eq 1 ]; then
+              echo "::warning::[$major] $ref not published on Docker Hub yet — skipping until it lands"
+            else
+              echo "::warning::[$major] could not verify $ref (transient registry error) — keeping (fail-open)"
+              published=$(jq -c --argjson r "$row" '. + [$r]' <<<"$published")
+            fi
+          done < <(jq -c '.[]' full-builds.json)
+          printf '%s' "$published" > full-builds.json
+
+          echo "Candidate builds (base published):"
+          jq . full-builds.json
+
+          if [ "$(jq 'length' full-builds.json)" -eq 0 ]; then
+            echo "No buildable majors after existence filter — emitting empty matrix."
+            echo "builds=[]" >> "$GITHUB_OUTPUT"
+            echo "latest=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           latest=$(jq -r 'map(.major | tonumber) | max' full-builds.json)
           echo "Latest non-blocked major: $latest"
 
