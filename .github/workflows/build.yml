@@ -67,7 +67,7 @@ jobs:
       - name: Install crane
         env:
           # renovate: datasource=github-releases depName=google/go-containerregistry
-          CRANE_VERSION: v0.20.2
+          CRANE_VERSION: v0.21.6
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
@@ -463,7 +463,7 @@ jobs:
         name: Resolve upstream base digest
         env:
           # renovate: datasource=github-releases depName=google/go-containerregistry
-          CRANE_VERSION: v0.20.2
+          CRANE_VERSION: v0.21.6
           NC_VERSION: ${{ matrix.build.version }}
         run: |
           set -euo pipefail
