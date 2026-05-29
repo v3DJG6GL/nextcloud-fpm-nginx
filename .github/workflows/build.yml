@@ -28,7 +28,7 @@ on:
         type: boolean
         default: false
   schedule:
-    # 06:00 + 18:00 UTC — every scheduled run applies BOTH gates:
+    # 05:25 + 17:35 UTC — every scheduled run applies BOTH gates:
     #   digest-drift gate → picks up versions.json bumps and in-place upstream
     #     rebuilds of nextcloud:<ver>-fpm (Debian/PHP CVEs).
     #   staleness gate    → if a major's published image is >=14d old AND
@@ -39,7 +39,13 @@ on:
     #     weekday) means rebuild fires within 24h of age crossing 14d,
     #     instead of up to 7d later.
     # A run where nothing has drifted AND nothing is stale is a ~30s no-op.
-    - cron: '0 6,18 * * *'
+    #
+    # Off-peak minutes (:25 / :35) avoid the top-of-hour contention GitHub
+    # flags as high-load, and hours 05/17 UTC stay clear of the 22:00–02:00
+    # UTC midnight congestion band — both cut the chance of a delayed or
+    # dropped scheduled run. Two entries because the minutes differ.
+    - cron: '25 5 * * *'
+    - cron: '35 17 * * *'
 
 # Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
 # in-flight publishes to ghcr.io).
