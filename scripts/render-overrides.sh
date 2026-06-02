@@ -3,7 +3,7 @@
 # supervisord starts, so we can write to /usr/local/etc/. Generates:
 #   /usr/local/etc/php/conf.d/zz-env-overrides.ini  (PHP_*)
 #   /usr/local/etc/php-fpm.d/zz-env.conf            (FPM_*)
-#   /etc/nginx/conf.d/90-env-overrides.conf         (NGINX_HSTS)
+#   /etc/nginx/snippets/nc-hsts.conf                (NGINX_HSTS)
 # The `zz-` prefix on the PHP ini ensures it loads AFTER the upstream image's
 # `opcache-recommended.ini` and `nextcloud.ini` (lexical order).
 # Plus in-place patches `server_name` in /etc/nginx/nginx.conf from
@@ -23,10 +23,15 @@ set -eu
 php_ini=/usr/local/etc/php/conf.d/zz-env-overrides.ini
 fpm_conf=/usr/local/etc/php-fpm.d/zz-env.conf
 nginx_conf=/etc/nginx/conf.d/90-env-overrides.conf
+hsts_snippet=/etc/nginx/snippets/nc-hsts.conf
 
 : > "$php_ini"
 : > "$fpm_conf"
 : > "$nginx_conf"
+# Always (re)create the HSTS snippet — nginx.conf `include`s it by literal path
+# in two scopes, and a missing include fails `nginx -t`. Empty unless NGINX_HSTS
+# is set; truncating each boot also clears a stale value from a previous start.
+: > "$hsts_snippet"
 
 # clean_val NAME — echoes the env var's value with surrounding whitespace and
 # one pair of surrounding single/double quotes stripped. Returns empty if the
@@ -51,17 +56,38 @@ clean_val() {
     printf '%s' "$raw"
 }
 
-emit_ini() {
-    file=$1; key=$2; var=$3
+# A literal newline, for the metacharacter check below.
+nl='
+'
+
+# prepare_val KEY VAR — echoes a safe value for KEY, or nothing (and returns 1)
+# when the override should be skipped. Skips empty/whitespace/quotes-only values,
+# and values carrying an INI metacharacter — a `;` (starts a comment, truncating
+# the directive) or a newline (would inject a second line). Shared by the PHP-ini
+# and FPM-pool emitters below.
+prepare_val() {
+    key=$1; var=$2
     val=$(clean_val "$var")
     if [ -z "$val" ]; then
         eval "orig=\${$var-__UNSET__}"
         if [ "$orig" != "__UNSET__" ] && [ -n "$orig" ]; then
             echo "render-overrides: skipping ${key} — \$${var} is empty/whitespace/quotes-only after trim" >&2
         fi
-        return 0
+        return 1
     fi
-    echo "${key}=${val}" >> "$file"
+    case "$val" in
+        *';'* | *"$nl"*)
+            echo "render-overrides: skipping ${key} — \$${var} contains an INI metacharacter (';' or newline)" >&2
+            return 1
+            ;;
+    esac
+    printf '%s' "$val"
+}
+
+emit_ini() {
+    file=$1; key=$2; var=$3
+    v=$(prepare_val "$key" "$var") || return 0
+    echo "${key}=${v}" >> "$file"
 }
 
 # --- PHP ini overrides --------------------------------------------------------
@@ -81,19 +107,12 @@ emit_ini "$php_ini" opcache.jit_buffer_size          PHP_OPCACHE_JIT_BUFFER_SIZE
 fpm_header=0
 emit_fpm() {
     key=$1; var=$2
-    val=$(clean_val "$var")
-    if [ -z "$val" ]; then
-        eval "orig=\${$var-__UNSET__}"
-        if [ "$orig" != "__UNSET__" ] && [ -n "$orig" ]; then
-            echo "render-overrides: skipping ${key} — \$${var} is empty/whitespace/quotes-only after trim" >&2
-        fi
-        return 0
-    fi
+    v=$(prepare_val "$key" "$var") || return 0
     if [ "$fpm_header" -eq 0 ]; then
         echo "[www]" >> "$fpm_conf"
         fpm_header=1
     fi
-    echo "${key} = ${val}" >> "$fpm_conf"
+    echo "${key} = ${v}" >> "$fpm_conf"
 }
 
 emit_fpm "pm"                          FPM_PM
@@ -118,9 +137,7 @@ server_name_escaped=$(printf '%s' "$server_name" | sed -e 's/[\\&|]/\\&/g')
 sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name_escaped};|" /etc/nginx/nginx.conf
 
 if [ -n "${NGINX_HSTS:-}" ]; then
-    cat > "$nginx_conf" <<EOF
-add_header Strict-Transport-Security "${NGINX_HSTS}" always;
-EOF
+    printf 'add_header Strict-Transport-Security "%s" always;\n' "${NGINX_HSTS}" > "$hsts_snippet"
 fi
 
 # --- notify_push (optional) --------------------------------------------------
@@ -158,6 +175,10 @@ esac
 cron_conf=/etc/supervisor/conf.d/cron.conf
 case "${NEXTCLOUD_CRON_ENABLE:-false}" in
     true|1|yes|on)
+        # Best-effort double-fire guard: the compose `cron` sidecar runs in a
+        # separate container we can't inspect from here, so this is a warning,
+        # not an enforced lock. If both run, background jobs fire twice.
+        echo "render-overrides: in-container cron ENABLED — ensure the compose 'cron' sidecar is NOT also running (set NEXTCLOUD_CRON_ENABLE=false if you use the sidecar), or background jobs fire twice" >&2
         # Run as root because /cron.sh exec's `busybox crond -L /dev/stdout`,
         # which fails to reopen /dev/stdout under setuid(www-data) due to FD
         # owner mismatch. busybox crond reads /var/spool/cron/crontabs/www-data
