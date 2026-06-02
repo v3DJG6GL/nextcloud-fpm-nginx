@@ -52,6 +52,7 @@ teardown() {
     exit_code=$(container_exit_code "$CTN")
     log "container exit code: $exit_code"
     # Exit 0 is ideal but 'SIGTERM-derived' (143) or 'SIGINT-derived' (130)
-    # non-zero is also acceptable — so the upper bound must INCLUDE 130.
-    [ "$exit_code" -ge 0 ] && [ "$exit_code" -le 143 ]
+    # non-zero is also acceptable. Accept only those three — a generic crash
+    # code (1, 2, 70, …) during signal handling is NOT a graceful shutdown.
+    [ "$exit_code" -eq 0 ] || [ "$exit_code" -eq 130 ] || [ "$exit_code" -eq 143 ]
 }

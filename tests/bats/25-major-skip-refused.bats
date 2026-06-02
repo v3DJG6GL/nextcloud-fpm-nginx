@@ -42,12 +42,12 @@ teardown() {
     # We don't strictly require exit; the entrypoint may log + exit OR loop.
     local deadline=$(( $(date +%s) + 60 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        if docker logs "$CTN" 2>&1 | grep -qE 'Major Version is too low|too low to upgrade from|Updates between multiple major versions are unsupported|Can.t start Nextcloud'; then
+        if docker logs "$CTN" 2>&1 | grep -qE 'Major Version is too low|too low to upgrade from|Updates between multiple major versions are unsupported'; then
             break
         fi
         sleep 3
     done
 
     run docker logs "$CTN"
-    assert_match "$output" 'Major Version is too low|too low to upgrade from|Updates between multiple major versions are unsupported|Can.t start Nextcloud'
+    assert_match "$output" 'Major Version is too low|too low to upgrade from|Updates between multiple major versions are unsupported'
 }
