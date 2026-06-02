@@ -208,10 +208,12 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         if [ "$prune_data" = "1" ]; then
             echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www [pruning $data_dir, .ncdata already $(stat -c '%u:%g' "$data_sentinel")] ($www_reason)" >&2
             find /var/www -path "$data_dir" -prune -o \
-                -exec chown -h "${target_uid}:${target_gid}" {} +
+                -exec chown -h "${target_uid}:${target_gid}" {} + \
+                || echo "entrypoint: WARNING — some files under /var/www could not be chowned (continuing; check read-only mounts / immutable flags)" >&2
         else
             echo "entrypoint: chown -R ${target_uid}:${target_gid} /var/www ($www_reason; may take a while)" >&2
-            chown -R "${target_uid}:${target_gid}" /var/www
+            chown -R "${target_uid}:${target_gid}" /var/www \
+                || echo "entrypoint: WARNING — chown -R /var/www did not fully succeed (continuing; check read-only mounts / immutable flags)" >&2
         fi
     fi
 
@@ -231,7 +233,8 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
                         reason="no .ncdata/.ocdata in $data_dir yet"
                     fi
                     echo "entrypoint: chown -R ${target_uid}:${target_gid} $data_dir ($reason; may take a while on large data)" >&2
-                    chown -R "${target_uid}:${target_gid}" "$data_dir"
+                    chown -R "${target_uid}:${target_gid}" "$data_dir" \
+                        || echo "entrypoint: WARNING — chown -R $data_dir did not fully succeed (continuing)" >&2
                 fi
                 ;;
             *)
@@ -242,7 +245,8 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
                     reason="no .ncdata/.ocdata sentinel in $data_dir yet (fresh data dir, or pre-NC-init)"
                 fi
                 echo "entrypoint: chown -R ${target_uid}:${target_gid} $data_dir ($reason; may take a while on large data)" >&2
-                chown -R "${target_uid}:${target_gid}" "$data_dir"
+                chown -R "${target_uid}:${target_gid}" "$data_dir" \
+                    || echo "entrypoint: WARNING — chown -R $data_dir did not fully succeed (continuing)" >&2
                 ;;
         esac
     fi
