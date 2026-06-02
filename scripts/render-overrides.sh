@@ -128,6 +128,18 @@ emit_fpm "slowlog"                     FPM_SLOWLOG
 # server_name patched in place — nginx doesn't honor server_name redeclared
 # from an include in the same server {} block.
 server_name="${NGINX_SERVER_NAME:-_}"
+# A newline in the value terminates the sed s||| command early ("unterminated
+# `s' command"), aborting the sed; under `set -e` that kills the entrypoint
+# before nginx starts. The replacement-escape below only handles \ & | — sed
+# can't escape a literal newline in the replacement — and an nginx server_name
+# never legitimately contains one, so reject it and fall back to the default
+# (mirrors the HSTS newline reject further down).
+case "$server_name" in
+    *"$nl"*)
+        echo "render-overrides: ignoring NGINX_SERVER_NAME — value contains a newline that would break the nginx directive" >&2
+        server_name=_
+        ;;
+esac
 # Escape characters special to sed's replacement (\ and &) plus the | delimiter
 # so a server name containing them can't garble or abort the s||| command —
 # an aborted sed would, under `set -e`, kill the entrypoint before nginx starts.
