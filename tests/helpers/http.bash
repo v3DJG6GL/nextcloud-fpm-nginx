@@ -57,27 +57,3 @@ header_value() {
         }
     '
 }
-
-# assert_header_present <path> <header-name> [extra-curl-args...]
-assert_header_present() {
-    local path="$1" name="$2"; shift 2
-    local hdrs
-    hdrs=$(nc_headers "$path" "$@")
-    if ! printf '%s' "$hdrs" | grep -qiE "^${name}: "; then
-        log "expected header '$name' in response to GET $path"
-        log "raw headers:"
-        printf '%s\n' "$hdrs" | sed 's/^/#   /' >&3
-        return 1
-    fi
-}
-
-# assert_header_absent <path> <header-name> [extra-curl-args...]
-assert_header_absent() {
-    local path="$1" name="$2"; shift 2
-    local hdrs
-    hdrs=$(nc_headers "$path" "$@")
-    if printf '%s' "$hdrs" | grep -qiE "^${name}: "; then
-        log "expected header '$name' to NOT be present, got it"
-        return 1
-    fi
-}
