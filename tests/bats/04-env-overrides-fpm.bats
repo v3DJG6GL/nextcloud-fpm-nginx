@@ -98,10 +98,12 @@ SH
 # directive line); NGINX_HSTS gets its own reject for a '"', '$' or
 # newline ('"'/newline close the nginx string early; '$' is interpolated by
 # nginx in add_header values, silently corrupting the header or failing
-# nginx -t). These are the exact guards the printf-not-echo emitter exists to
+# nginx -t); NGINX_SERVER_NAME rejects a newline, ';' or '#' (';' injects a
+# directive, '#' comments out the ';' terminator so nginx swallows the next
+# directive). These are the exact guards the printf-not-echo emitter exists to
 # keep effective — yet no test exercised them, so breaking the
-# `*';'*|*"$nl"*` / `*'"'*|*'$'*|*"$nl"*` cases stayed green. Same mktemp
-# sandbox as the empty/quoted test above.
+# `*';'*|*"$nl"*` / `*'"'*|*'$'*|*"$nl"*` / `*"$nl"*|*';'*|*'#'*` cases stayed
+# green. Same mktemp sandbox as the empty/quoted test above.
 @test "render-overrides rejects ';'/newline FPM_* and '\"' NGINX_HSTS (injection guards)" {
     local payload
     payload=$(cat <<'SH'
@@ -139,6 +141,18 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     "$sb/render.sh" 2>&1
 echo "--- nc-hsts.conf (\$ test) ---"
 cat "$sb/snippets/nc-hsts.conf" 2>/dev/null || true
+# Third render: a NGINX_SERVER_NAME carrying a '#'. nginx treats '#' as a line
+# comment, so `foo.com #` would be written as `server_name foo.com #;` — the
+# appended ';' is commented out, the directive is left unterminated, and nginx
+# folds the following `root` directive into the server_name arguments (valid
+# config that passes nginx -t but silently drops `root`). The ';'/newline-only
+# reject let it through; the server_name patch must fall back to '_'.
+echo "=== third render: '#' NGINX_SERVER_NAME ==="
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    NGINX_SERVER_NAME='foo.com #' \
+    "$sb/render.sh" 2>&1
+echo "--- nginx.conf server_name (# test) ---"
+grep -E '^\s*server_name ' "$sb/nginx.conf" 2>/dev/null || true
 rm -rf "$sb"
 SH
 )
@@ -156,4 +170,9 @@ SH
     assert_match "$output" "skipping NGINX_HSTS"
     assert_not_match "$output" "Strict-Transport-Security"
     assert_not_match "$output" "pwned"
+    # the '#' server_name is rejected, with the ignore logged, and the patched
+    # nginx.conf falls back to `server_name _;` — the dangerous value never lands
+    assert_match "$output" "ignoring NGINX_SERVER_NAME"
+    assert_match "$output" "^\s*server_name _;"
+    assert_not_match "$output" "server_name foo\.com"
 }

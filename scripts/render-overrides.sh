@@ -133,8 +133,8 @@ emit_fpm "slowlog"                     FPM_SLOWLOG
 # server_name patched in place — nginx doesn't honor server_name redeclared
 # from an include in the same server {} block.
 server_name="${NGINX_SERVER_NAME:-_}"
-# Reject two characters that never legitimately appear in a server_name (names
-# are space-separated, so neither is needed):
+# Reject three characters that never legitimately appear in a server_name (names
+# are space-separated, so none is needed):
 #   - a newline terminates the sed s||| command early ("unterminated `s'
 #     command"), aborting the sed; under `set -e` that kills the entrypoint
 #     before nginx starts. The replacement-escape below only handles \ & | —
@@ -143,10 +143,18 @@ server_name="${NGINX_SERVER_NAME:-_}"
 #     value like `example.com; return 444` is written verbatim as
 #     `server_name example.com; return 444;`, silently INJECTING an extra
 #     directive (or breaking `nginx -t` and aborting boot).
-# Either case falls back to the default (mirrors the HSTS reject further down).
+#   - a '#' begins an nginx line comment that swallows the appended ';'
+#     terminator, so a value like `example.com #` is written as
+#     `server_name example.com #;` — the ';' is commented out, leaving the
+#     directive UNTERMINATED. nginx then folds the next physical directive
+#     (here `root /var/www/html;`) into the server_name arguments, yielding
+#     `server_name example.com root /var/www/html;` — VALID config that passes
+#     `nginx -t` but silently CONSUMES the `root` directive, so the site serves
+#     from nginx's compiled-in default root (404s everywhere).
+# Any case falls back to the default (mirrors the HSTS reject further down).
 case "$server_name" in
-    *"$nl"* | *';'*)
-        echo "render-overrides: ignoring NGINX_SERVER_NAME — value contains a newline or ';' that would break or inject into the nginx directive" >&2
+    *"$nl"* | *';'* | *'#'*)
+        echo "render-overrides: ignoring NGINX_SERVER_NAME — value contains a newline, ';' or '#' that would break or inject into the nginx directive" >&2
         server_name=_
         ;;
 esac
