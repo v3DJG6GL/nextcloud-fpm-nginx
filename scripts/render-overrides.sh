@@ -133,15 +133,20 @@ emit_fpm "slowlog"                     FPM_SLOWLOG
 # server_name patched in place — nginx doesn't honor server_name redeclared
 # from an include in the same server {} block.
 server_name="${NGINX_SERVER_NAME:-_}"
-# A newline in the value terminates the sed s||| command early ("unterminated
-# `s' command"), aborting the sed; under `set -e` that kills the entrypoint
-# before nginx starts. The replacement-escape below only handles \ & | — sed
-# can't escape a literal newline in the replacement — and an nginx server_name
-# never legitimately contains one, so reject it and fall back to the default
-# (mirrors the HSTS newline reject further down).
+# Reject two characters that never legitimately appear in a server_name (names
+# are space-separated, so neither is needed):
+#   - a newline terminates the sed s||| command early ("unterminated `s'
+#     command"), aborting the sed; under `set -e` that kills the entrypoint
+#     before nginx starts. The replacement-escape below only handles \ & | —
+#     sed can't escape a literal newline in the replacement.
+#   - a ';' is nginx's statement terminator. The escape doesn't touch it, so a
+#     value like `example.com; return 444` is written verbatim as
+#     `server_name example.com; return 444;`, silently INJECTING an extra
+#     directive (or breaking `nginx -t` and aborting boot).
+# Either case falls back to the default (mirrors the HSTS reject further down).
 case "$server_name" in
-    *"$nl"*)
-        echo "render-overrides: ignoring NGINX_SERVER_NAME — value contains a newline that would break the nginx directive" >&2
+    *"$nl"* | *';'*)
+        echo "render-overrides: ignoring NGINX_SERVER_NAME — value contains a newline or ';' that would break or inject into the nginx directive" >&2
         server_name=_
         ;;
 esac
