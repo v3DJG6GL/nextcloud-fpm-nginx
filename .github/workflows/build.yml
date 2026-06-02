@@ -336,6 +336,11 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
+          # Force-pull the base manifest so we test the SAME nextcloud:<ver>-fpm
+          # the publish build ships (it also sets pull: true). Without this, a
+          # digest-drift rebuild (no_cache=false) resolves the base from cache
+          # and would validate the OLD base while publish pulls the NEW one.
+          pull: true
           # Match the publish build: when the staleness gate sets no_cache, test
           # the freshly-resolved apt layers (libssl/pcre/zlib/…) that will
           # actually ship, not stale cached ones. Costs a full uncached build on
@@ -413,7 +418,9 @@ jobs:
           context: .
           platforms: linux/arm64
           load: true
-          # See amd64 step: test the no-cache image the staleness gate will ship.
+          # See amd64 step: force-pull the base + test the no-cache image the
+          # staleness gate will ship.
+          pull: true
           no-cache: ${{ matrix.build.no_cache }}
           tags: nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
           build-args: |
