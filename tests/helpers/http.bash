@@ -17,7 +17,9 @@ nc_curl() {
 }
 
 # nc_headers <path> [extra-curl-args...]
-# Returns the response headers (lowercased keys).
+# Returns the raw response headers, with the server's original key casing
+# (curl -I does not lowercase them). Match case-insensitively, or via
+# header_value(), which lowercases both sides.
 nc_headers() {
     local path="$1"; shift
     local base
