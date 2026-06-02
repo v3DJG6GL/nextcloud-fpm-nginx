@@ -73,6 +73,13 @@ teardown() {
     local count
     count=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'usermod www-data')
     assert_eq "$count" "1" "expected exactly 1 usermod log line across both starts"
+    # And the chown itself must be SKIPPED on the restart — that's the named
+    # behavior. version.php is already 1500:1500 from the first boot, so the
+    # sentinel skips the second chown: exactly 1 chown line across both starts.
+    # (`grep -c` exits 1 when count is 0; `|| true` keeps bats' set -e happy.)
+    local chown_count
+    chown_count=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'chown -R 1500:1500 /var/www' || true)
+    assert_eq "$chown_count" "1" "chown should run once (first boot) and be skipped on restart via sentinel"
 }
 
 # Regression for the case the previous test DOESN'T cover: container
