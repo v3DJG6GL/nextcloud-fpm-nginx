@@ -5,8 +5,10 @@ on:
     branches: [main, master]
     # Paths filter on push only — saves a full-matrix run on the squash-merge
     # commits whose touched files don't actually affect the image (READMEs,
-    # docs, etc.). compose.yaml is included because Renovate bumps the test
-    # services (postgres / redis / mariadb tags) there.
+    # docs, etc.). compose.yaml is the documented production deployment; include
+    # it so changes to the shipped topology (image ref, postgres/redis tags
+    # users run) re-trigger validation. The test-service tags themselves live in
+    # tests/compose/*.yaml, already covered by the tests/** entry below.
     paths:
       - Dockerfile
       - nginx.conf
