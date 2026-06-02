@@ -41,7 +41,7 @@ services:
       REDIS_HOST: redis
       NEXTCLOUD_ADMIN_USER: admin
       NEXTCLOUD_ADMIN_PASSWORD: changeme
-      NEXTCLOUD_TRUSTED_DOMAINS: localhost
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost example.test
       NOTIFY_PUSH_ENABLE: ${SCENARIO_NOTIFY_PUSH:-false}
       NEXTCLOUD_CRON_ENABLE: ${NC_CRON_INCONTAINER:-false}
       # Representative test values for env-override assertions (tests/bats/03-05).

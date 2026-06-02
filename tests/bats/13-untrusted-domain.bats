@@ -15,6 +15,15 @@ load '../helpers/nc.bash'
     [ -n "$output" ]
 }
 
+@test "second trusted domain registered (guards #1666 space-split)" {
+    # The fixture sets NEXTCLOUD_TRUSTED_DOMAINS="localhost example.test".
+    # #1666 wrote ONLY index 0, so this index-1 assertion is what actually
+    # exercises the space-split regression the file is named for.
+    run nc_config_system_get trusted_domains 1
+    assert_status_zero "$status"
+    assert_eq "$output" "example.test"
+}
+
 @test "/ with trusted Host returns 2xx or 3xx (not 400 untrusted-domain)" {
     run nc_status_code / -H 'Host: localhost'
     assert_status_zero "$status"
