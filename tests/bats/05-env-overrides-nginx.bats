@@ -31,6 +31,11 @@ load '../helpers/http.bash'
     run nc_headers /core/css/server.css
     assert_status_zero "$status"
     assert_match "$output" 'Strict-Transport-Security: max-age=31536000'
+    # Pin that the static-asset location (not a fallthrough to `location /` or a
+    # 404) actually served this: Cache-Control: public is emitted ONLY by that
+    # block. Without it, dropping .css from the static regex would still inherit
+    # server-scope HSTS and this test would stay green.
+    assert_match "$output" 'Cache-Control: public'
 }
 
 @test "nginx config validates after server_name patch + HSTS include" {
