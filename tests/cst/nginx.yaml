@@ -14,6 +14,11 @@ commandTests:
     command: nginx
     args: ['-V']
     exitCode: 0
+    # nginx -V prints its configure args to stderr; assert the modules are
+    # actually compiled in (exitCode alone is 0 for any nginx build).
+    expectedError:
+      - '--with-http_ssl_module'
+      - '--with-http_v2_module'
 
   - name: nginx.conf includes upstream php-handler at 127.0.0.1:9000
     command: grep
