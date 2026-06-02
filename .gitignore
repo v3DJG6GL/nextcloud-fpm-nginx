@@ -8,6 +8,7 @@ data/
 # Local-only notes — never push
 NOTES-LOCAL.md
 MIGRATION-FROM-LSIO.md
+CODE-REVIEW_NOTES.md
 
 # Reference / scratch files (your own deployments, snapshots, etc.)
 compose-current-config.yaml
