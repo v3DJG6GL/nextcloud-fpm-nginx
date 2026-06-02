@@ -56,9 +56,9 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
     if [ "$target_gid" != "$current_gid" ]; then
         echo "entrypoint: groupmod www-data $current_gid -> $target_gid (direct /etc/group edit, no implicit recurse)" >&2
         sed -i -E "s|^(www-data:[^:]*:)[0-9]+:|\\1${target_gid}:|" /etc/group
-        if [ -f /etc/gshadow ]; then
-            sed -i -E "s|^(www-data:[^:]*:)[0-9]*:|\\1${target_gid}:|" /etc/gshadow || true
-        fi
+        # NB: /etc/gshadow is intentionally NOT touched — its format is
+        # name:password:admins:members and carries no GID field, so a GID change
+        # has nothing to rewrite there.
         # Also rewrite www-data's PRIMARY gid (4th field) in /etc/passwd.
         # Without this, setting PGID while leaving PUID unset (uid unchanged,
         # so the passwd edit below is skipped) leaves the process running with
