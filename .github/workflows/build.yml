@@ -555,7 +555,10 @@ jobs:
             org.opencontainers.image.base.digest=${{ steps.base.outputs.base_digest }}
           provenance: true
           sbom: true
+          # Read the per-arch caches the test jobs populated. No cache-to here:
+          # the test jobs already export to nc-<major>-{amd64,arm64} (the scopes
+          # the next run reads), so a merged nc-<major> export would never be
+          # consumed — just wasted upload time + GHA cache-quota eviction pressure.
           cache-from: |
             type=gha,scope=nc-${{ matrix.build.major }}-amd64
             type=gha,scope=nc-${{ matrix.build.major }}-arm64
-          cache-to: type=gha,scope=nc-${{ matrix.build.major }},mode=max
