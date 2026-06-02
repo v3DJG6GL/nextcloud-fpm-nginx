@@ -47,7 +47,12 @@ teardown() {
         "$NC_IMAGE" >/dev/null
     wait_until 90 5 sh -c "docker exec $CTN curl -fsS http://127.0.0.1/status.php 2>/dev/null | grep -q '\"installed\":true'"
     docker kill -s SIGINT "$CTN" >/dev/null
-    wait_until 25 1 sh -c "[ \"\$(docker inspect --format='{{.State.Status}}' $CTN)\" = exited ]"
+    # Require the container to actually exit. `docker inspect .State.ExitCode`
+    # reports 0 for a STILL-RUNNING container, so without this guard a hung or
+    # ignored SIGINT (the exact non-graceful failure this test exists to catch)
+    # would read exit_code=0 below and pass green.
+    wait_until 25 1 sh -c "[ \"\$(docker inspect --format='{{.State.Status}}' $CTN)\" = exited ]" \
+        || { log "container did not exit within 25s of SIGINT (still running → not graceful)"; return 1; }
     local exit_code
     exit_code=$(container_exit_code "$CTN")
     log "container exit code: $exit_code"
