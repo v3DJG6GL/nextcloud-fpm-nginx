@@ -51,6 +51,7 @@ teardown() {
     local exit_code
     exit_code=$(container_exit_code "$CTN")
     log "container exit code: $exit_code"
-    # Exit 0 is ideal but 'SIGTERM-derived' or 'SIGINT-derived' non-zero is also acceptable.
-    [ "$exit_code" -ge 0 ] && [ "$exit_code" -lt 130 ]
+    # Exit 0 is ideal but 'SIGTERM-derived' (143) or 'SIGINT-derived' (130)
+    # non-zero is also acceptable — so the upper bound must INCLUDE 130.
+    [ "$exit_code" -ge 0 ] && [ "$exit_code" -le 143 ]
 }

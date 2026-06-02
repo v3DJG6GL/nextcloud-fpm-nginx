@@ -45,11 +45,12 @@ teardown_file() {
     assert_match "$output" '"maintenance":false'
 }
 
-@test "healthcheck CMD fails when maintenance is on" {
+@test "healthcheck CMD stays healthy in maintenance mode (only checks installed:true)" {
     # The Docker HEALTHCHECK is `curl -fsS status.php | grep -q "installed":true`.
-    # When in maintenance, status.php still says installed:true so the grep
-    # passes... wait that's a bug. Our HEALTHCHECK doesn't grep for
-    # maintenance:false. Verify the existing behavior is documented.
+    # In maintenance mode status.php still reports installed:true, so the grep
+    # succeeds and the healthcheck returns 0. This is INTENTIONAL — otherwise
+    # Docker would restart the container while an admin performs maintenance.
+    # Assert that documented behavior exactly (status -eq 0), not a tautology.
     local cid
     cid=$(compose ps -q nc)
     occ maintenance:mode --on >/dev/null
@@ -57,17 +58,5 @@ teardown_file() {
     # Run the healthcheck CMD manually:
     run docker exec "$cid" sh -c 'curl -fsS http://127.0.0.1/status.php 2>/dev/null | grep -q "\"installed\":true"'
     occ maintenance:mode --off >/dev/null
-    # Existing HEALTHCHECK returns 0 in maintenance mode (only checks installed:true).
-    # This is INTENTIONAL — Docker would otherwise restart the container while
-    # an admin is performing maintenance. Verify our HEALTHCHECK definition
-    # matches expectation.
-    if [ "$status" -eq 0 ]; then
-        log "HEALTHCHECK returns success in maintenance mode (only checks installed:true) — this is intentional"
-    else
-        log "HEALTHCHECK fails in maintenance mode"
-    fi
-    # Either way is acceptable as long as the behavior is documented; we just
-    # assert the healthcheck command itself doesn't error out for reasons
-    # other than the maintenance check.
-    [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+    assert_status_zero "$status" "healthcheck must stay green in maintenance mode (status.php still installed:true)"
 }

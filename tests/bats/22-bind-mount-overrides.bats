@@ -15,24 +15,26 @@ teardown() {
     container_rm "$CTN"
 }
 
-@test "php-local.ini at 99-local.ini overrides date.timezone" {
-    # 99- prefix wins over both upstream (numbered low) and our zz- (suffix).
-    # No, wait — 9 < z lexically? '9' is 0x39, 'z' is 0x7a — so 9 < z. Our zz-
-    # comes LAST. To win, mount user file as 99zzz-local.ini.
+@test "bind-mounted php ini (zzz-user.ini) overrides PHP_* env-driven values" {
+    # User override files must sort AFTER our zz-env-overrides.ini — '9' is 0x39
+    # and 'z' is 0x7a, so a '99-' prefix would LOSE to 'zz-'; mount at zzz-user.ini.
+    # PHP_TIMEZONE is set to a value DIFFERENT from the fixture so a passing
+    # assertion proves the bind-mount actually won (not that both happened to
+    # agree, which the previous version of this test could not distinguish).
     docker run -d --name "$CTN" \
         -e SQLITE_DATABASE=nc.db \
         -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
         -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
-        -e PHP_TIMEZONE=America/Anchorage \
+        -e PHP_TIMEZONE=Europe/Berlin \
         -v "$FIXDIR/php-local.ini:/usr/local/etc/php/conf.d/zzz-user.ini:ro" \
         "$NC_IMAGE" >/dev/null
     sleep 6
     run docker exec "$CTN" php -r 'echo date_default_timezone_get();'
     assert_status_zero "$status"
-    assert_eq "$output" "America/Anchorage" "fixture file sets the same timezone; env var was already at this value"
-    # Override via fixture's value:
+    assert_eq "$output" "America/Anchorage" "zzz-user.ini must override PHP_TIMEZONE=Europe/Berlin from zz-env-overrides.ini"
+    # Fixture also sets opcache.jit_buffer_size=384M (env doesn't set it here).
     run docker exec "$CTN" php -r 'echo ini_get("opcache.jit_buffer_size");'
-    assert_eq "$output" "384M" "php-local.ini sets opcache.jit_buffer_size=384M (matches env value); both work"
+    assert_eq "$output" "384M" "php-local.ini sets opcache.jit_buffer_size=384M"
 }
 
 @test "www2.conf at zzz-local.conf overrides FPM pool settings" {

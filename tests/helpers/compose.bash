@@ -49,8 +49,14 @@ nc_host_url() {
 # Wait until Nextcloud reports installed=true via status.php.
 wait_for_nc_install() {
     local timeout="${1:-180}"
-    local url
-    url=$(nc_host_url)/status.php
+    local base url
+    # Capture nc_host_url's failure instead of letting `$(...)/status.php`
+    # swallow its `return 1` — otherwise a missing host port yields the bogus
+    # URL "/status.php" and we'd poll it uselessly until the full timeout.
+    if ! base=$(nc_host_url); then
+        return 1
+    fi
+    url="${base}/status.php"
     log "waiting for $url to report installed=true (timeout ${timeout}s)..."
     local deadline=$(( $(date +%s) + timeout ))
     while [ "$(date +%s)" -lt "$deadline" ]; do

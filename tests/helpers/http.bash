@@ -3,7 +3,9 @@
 
 # nc_curl <method> <path> [extra-curl-args...]
 # Example: nc_curl GET /status.php
-#          nc_curl HEAD / -H 'X-Forwarded-Proto: https'
+#          nc_curl POST /index.php -H 'X-Forwarded-Proto: https'
+# NB: don't use this for HEAD — `curl -X HEAD` still waits for a body that never
+# arrives and hangs until timeout. Use nc_headers (curl -I) for header-only.
 nc_curl() {
     local method="$1" path="$2"; shift 2
     local base
@@ -42,8 +44,9 @@ nc_status_php() {
 # header_value <headers-blob> <header-name>
 # Extracts the value of one header from a raw response-headers dump.
 header_value() {
+    # Match case-insensitively via explicit tolower() on both sides — awk's
+    # IGNORECASE is a gawk-only extension and a silent no-op under mawk/busybox.
     printf '%s' "$1" | awk -v k="${2,,}" '
-        BEGIN { IGNORECASE=1 }
         tolower($1) == k":" {
             sub(/^[^ ]+ +/, "")
             sub(/\r$/, "")
