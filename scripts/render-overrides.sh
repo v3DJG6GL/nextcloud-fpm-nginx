@@ -85,7 +85,11 @@ prepare_val() {
 emit_ini() {
     file=$1; key=$2; var=$3
     v=$(prepare_val "$key" "$var") || return 0
-    echo "${key}=${v}" >> "$file"
+    # printf, not echo: dash's `echo` expands backslash escapes (\n, \t, …),
+    # which would re-inject the second directive line that prepare_val's
+    # newline reject exists to prevent (and corrupt any value with a literal
+    # backslash). printf '%s' emits the sanitized value verbatim.
+    printf '%s=%s\n' "$key" "$v" >> "$file"
 }
 
 # --- PHP ini overrides --------------------------------------------------------
@@ -110,7 +114,8 @@ emit_fpm() {
         echo "[www]" >> "$fpm_conf"
         fpm_header=1
     fi
-    echo "${key} = ${v}" >> "$fpm_conf"
+    # printf, not echo — see emit_ini: dash's echo would expand \n/\t in $v.
+    printf '%s = %s\n' "$key" "$v" >> "$fpm_conf"
 }
 
 emit_fpm "pm"                          FPM_PM
