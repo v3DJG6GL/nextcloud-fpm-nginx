@@ -28,7 +28,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     ln -sf /dev/stdout /var/log/nginx/access.log; \
     ln -sf /dev/stderr /var/log/nginx/error.log; \
-    mkdir -p /etc/supervisor/conf.d /etc/nginx/conf.d /var/log/supervisor
+    mkdir -p /etc/supervisor/conf.d /etc/nginx/conf.d /etc/nginx/snippets /var/log/supervisor
 
 # Install the Nextcloud notify_push binary (companion to the upstream
 # `notify_push` PHP app that ships in the official image). Disabled by default;
@@ -46,6 +46,7 @@ RUN set -eux; \
     /usr/local/bin/notify_push --version
 
 COPY nginx.conf                                     /etc/nginx/nginx.conf
+COPY snippets/nc-security-headers.conf              /etc/nginx/snippets/nc-security-headers.conf
 COPY supervisord.conf                               /etc/supervisor/supervisord.conf
 COPY --chmod=0755 scripts/entrypoint.sh             /usr/local/bin/container-entrypoint.sh
 COPY --chmod=0755 scripts/render-overrides.sh       /usr/local/bin/render-overrides.sh

@@ -11,8 +11,8 @@ load '../helpers/http.bash'
     assert_status_zero "$status"
 }
 
-@test "NGINX_HSTS drops into /etc/nginx/conf.d/90-env-overrides.conf" {
-    run compose_exec cat /etc/nginx/conf.d/90-env-overrides.conf
+@test "NGINX_HSTS drops into /etc/nginx/snippets/nc-hsts.conf" {
+    run compose_exec cat /etc/nginx/snippets/nc-hsts.conf
     assert_status_zero "$status"
     assert_match "$output" 'Strict-Transport-Security'
     assert_match "$output" 'max-age=31536000'
@@ -20,6 +20,15 @@ load '../helpers/http.bash'
 
 @test "Strict-Transport-Security header on responses" {
     run nc_headers /
+    assert_status_zero "$status"
+    assert_match "$output" 'Strict-Transport-Security: max-age=31536000'
+}
+
+@test "Strict-Transport-Security header on static assets (not just dynamic pages)" {
+    # Static assets are served by `location ~ \.(css|js|...)`, which declares its
+    # own add_header (Cache-Control) and so must re-include HSTS — regression
+    # guard for the per-block add_header reset.
+    run nc_headers /core/css/server.css
     assert_status_zero "$status"
     assert_match "$output" 'Strict-Transport-Security: max-age=31536000'
 }

@@ -32,6 +32,20 @@ load '../helpers/http.bash'
     assert_match "$output" 'X-Robots-Tag: noindex, nofollow'
 }
 
+@test "all 5 security headers present on static assets too" {
+    # The static-asset location declares its own add_header (Cache-Control), which
+    # resets inherited add_headers — so it must re-include the security snippet.
+    # This guards against that block silently dropping the headers.
+    run nc_headers /core/css/server.css
+    assert_status_zero "$status"
+    assert_match "$output" 'Referrer-Policy: no-referrer'
+    assert_match "$output" 'X-Content-Type-Options: nosniff'
+    assert_match "$output" 'X-Frame-Options: SAMEORIGIN'
+    assert_match "$output" 'X-Permitted-Cross-Domain-Policies: none'
+    assert_match "$output" 'X-Robots-Tag: noindex, nofollow'
+    assert_match "$output" 'Cache-Control: public'
+}
+
 @test "Content-Security-Policy header emitted by Nextcloud PHP" {
     run nc_headers /
     assert_match "$output" 'Content-Security-Policy:'
