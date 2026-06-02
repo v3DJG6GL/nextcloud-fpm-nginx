@@ -125,11 +125,20 @@ if ! command -v bats >/dev/null 2>&1; then
     exit 2
 fi
 
-BATS_FILES=$(ls tests/bats/*.bats 2>/dev/null | sort)
+# Collect bats files via a glob into an array (bash expands globs already sorted)
+# so paths can't be word-split or silently dropped — unlike `ls | sort` + an
+# unquoted variable, which mangles any filename containing whitespace or globs.
+shopt -s nullglob
+BATS_FILES=(tests/bats/*.bats)
+shopt -u nullglob
 if [ -n "${BATS_FILTER:-}" ]; then
-    BATS_FILES=$(printf '%s\n' "$BATS_FILES" | grep -E "$BATS_FILTER" || true)
+    filtered=()
+    for f in "${BATS_FILES[@]}"; do
+        [[ $f =~ $BATS_FILTER ]] && filtered+=("$f")
+    done
+    BATS_FILES=("${filtered[@]}")
 fi
-if [ -z "$BATS_FILES" ]; then
+if [ ${#BATS_FILES[@]} -eq 0 ]; then
     echo "(no bats files to run)"
     exit 0
 fi
@@ -140,5 +149,4 @@ BATS_REPORT="tests/reports/${COMPOSE_PROJECT_NAME}.xml"
 # user can override with BATS_JOBS=4 ./tests/run-all.sh
 : "${BATS_JOBS:=1}"
 
-# shellcheck disable=SC2086
-bats -j "$BATS_JOBS" --report-formatter junit -o tests/reports/ $BATS_FILES
+bats -j "$BATS_JOBS" --report-formatter junit -o tests/reports/ "${BATS_FILES[@]}"
