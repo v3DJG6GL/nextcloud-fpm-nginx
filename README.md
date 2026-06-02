@@ -243,7 +243,7 @@ order is overriding it — check for other `.conf` files in
 ```bash
 docker exec nc id www-data                                 # PUID/PGID actually applied
 docker exec nc grep -E '^\s*server_name' /etc/nginx/nginx.conf   # NGINX_SERVER_NAME
-docker exec nc cat /etc/nginx/conf.d/90-env-overrides.conf       # NGINX_HSTS
+docker exec nc cat /etc/nginx/snippets/nc-hsts.conf             # NGINX_HSTS
 docker exec nc supervisorctl status                              # NOTIFY_PUSH_ENABLE / NEXTCLOUD_CRON_ENABLE
 docker logs nc 2>&1 | grep -E 'entrypoint:'                      # PUID/PGID reassign banner
 ```
@@ -252,12 +252,14 @@ docker logs nc 2>&1 | grep -E 'entrypoint:'                      # PUID/PGID rea
 
 Anything our env vars don't expose can be set via bind-mounted config files —
 the standard `php:fpm` pattern. PHP and FPM load `*.ini` / `*.conf` in lexical
-order, so use prefixes like `99-` and `zzz-` to win over everything else.
+order, and our env-driven overrides land in `zz-env-overrides.ini` /
+`zz-env.conf`. To win over those, your file must sort **after** `zz-` — use a
+`zzz-` prefix (a `99-` prefix would lose, since `9` < `z`).
 
 ```yaml
 volumes:
   # PHP ini overrides
-  - ./php-local.ini:/usr/local/etc/php/conf.d/99-local.ini:ro
+  - ./php-local.ini:/usr/local/etc/php/conf.d/zzz-local.ini:ro
   # FPM pool overrides
   - ./www2.conf:/usr/local/etc/php-fpm.d/zzz-local.conf:ro
   # Nextcloud config fragments (loaded after main config.php)
@@ -311,7 +313,7 @@ Check the binary directly (the 400 means it's responding — the test endpoints
 need valid signatures):
 
 ```bash
-curl -si http://127.0.0.1:8088/push/test/cookie
+curl -si http://127.0.0.1:7867/push/test/cookie
 # HTTP/1.1 400 Bad Request   <-- this is correct; the binary is up
 ```
 

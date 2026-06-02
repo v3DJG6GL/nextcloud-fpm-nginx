@@ -66,7 +66,7 @@ Notes:
 
 Every push runs the full cartesian matrix (2 majors × 15 scenarios = 30
 cells) on `ubuntu-latest` + smoke (CST + container start) on
-`ubuntu-24.04-arm` (2 cells per major). The `build` job waits on both
+`ubuntu-24.04-arm` (one cell per major). The `build` job waits on both
 test jobs — failed tests block the push to ghcr.io.
 
 JUnit XML is uploaded as a workflow artifact and surfaced inline on PRs
