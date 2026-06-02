@@ -268,6 +268,45 @@ The Nextcloud `*.config.php` fragment pattern is the same one the upstream
 image uses for its seeded configs (`redis.config.php`, `apcu.config.php`,
 etc.) — Nextcloud merges all `*.config.php` files in the config dir on load.
 
+## Video previews (thumbnails for MP4/MKV/…)
+
+Image, PDF and text thumbnails work out of the box; **video thumbnails do
+not**, because they require two things this image's base doesn't give you by
+default:
+
+1. **`ffmpeg`** — the external binary `OC\Preview\Movie` shells out to. The
+   official `nextcloud:*-fpm` image ships none, so video files fall back to a
+   generic icon. This image installs it (see the Dockerfile).
+2. **The `OC\Preview\Movie` provider** — disabled by default in every
+   Nextcloud version for performance/privacy reasons. Enable it with the
+   bundled `movie-previews.config.php` fragment:
+
+   ```yaml
+   volumes:
+     - ./movie-previews.config.php:/var/www/html/config/zz-movie-previews.config.php:ro
+   ```
+
+   ⚠️ Setting `enabledPreviewProviders` **replaces** Nextcloud's entire
+   default provider set rather than merging — so the fragment re-lists all the
+   defaults alongside `OC\Preview\Movie`. A single `OC\Preview\Movie` provider
+   (MIME `video/*`) covers MP4, MKV, MOV, AVI, WebM, …; there is no separate
+   per-format provider class.
+
+After enabling, existing videos stay icon-only until backfilled — Nextcloud
+only generates previews on access/upload *after* the provider is on. Install
+the [Preview Generator](https://apps.nextcloud.com/apps/previewgenerator) app,
+then:
+
+```bash
+docker exec -u www-data <container> ffmpeg -version                      # binary present?
+docker exec -u www-data <container> php occ config:system:get enabledPreviewProviders | grep Movie
+docker exec -u www-data <container> php occ preview:generate-all -vvv     # backfill existing files
+```
+
+`occ preview:pre-generate` (run from cron) keeps new/changed files warm
+thereafter. Note the Preview Generator does not work with server-side
+encryption enabled.
+
 ## notify_push (real-time client sync)
 
 [`notify_push`](https://github.com/nextcloud/notify_push) is an official
