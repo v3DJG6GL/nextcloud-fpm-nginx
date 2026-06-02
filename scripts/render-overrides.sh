@@ -111,7 +111,11 @@ emit_fpm "slowlog"                     FPM_SLOWLOG
 # server_name patched in place — nginx doesn't honor server_name redeclared
 # from an include in the same server {} block.
 server_name="${NGINX_SERVER_NAME:-_}"
-sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name};|" /etc/nginx/nginx.conf
+# Escape characters special to sed's replacement (\ and &) plus the | delimiter
+# so a server name containing them can't garble or abort the s||| command —
+# an aborted sed would, under `set -e`, kill the entrypoint before nginx starts.
+server_name_escaped=$(printf '%s' "$server_name" | sed -e 's/[\\&|]/\\&/g')
+sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name_escaped};|" /etc/nginx/nginx.conf
 
 if [ -n "${NGINX_HSTS:-}" ]; then
     cat > "$nginx_conf" <<EOF
