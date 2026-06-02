@@ -38,9 +38,11 @@ commandTests:
     args:
       - '-c'
       - |
+        # The 5 static security headers live in the shared snippet (included at
+        # server scope and in the static-asset location), not in nginx.conf.
         for h in Referrer-Policy X-Content-Type-Options X-Frame-Options \
                  X-Permitted-Cross-Domain-Policies X-Robots-Tag; do
-            grep -q "add_header $h" /etc/nginx/nginx.conf || { echo "missing: $h"; exit 1; }
+            grep -q "add_header $h" /etc/nginx/snippets/nc-security-headers.conf || { echo "missing: $h"; exit 1; }
         done
     exitCode: 0
 

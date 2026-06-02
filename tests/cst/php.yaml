@@ -17,7 +17,11 @@ commandTests:
     args:
       - '-c'
       - |
-        required="bz2 ftp gd intl gmp bcmath imagick redis apcu opcache exif pcntl sysvsem zip igbinary memcached pdo_mysql pdo_pgsql ldap"
+        # NB: 'bz2' is not shipped by the upstream NC fpm image and Nextcloud
+        # core doesn't require it; 'opcache' lists as 'Zend OPcache' (a Zend
+        # module, not a plain module line) — both are validated separately below
+        # / in bats 02, so they're intentionally absent from this exact-match loop.
+        required="ftp gd intl gmp bcmath imagick redis apcu exif pcntl sysvsem zip igbinary memcached pdo_mysql pdo_pgsql ldap"
         missing=""
         for ext in $required; do
             if ! php -m | grep -qiE "^${ext}$"; then
