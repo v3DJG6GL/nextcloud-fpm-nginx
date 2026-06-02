@@ -32,6 +32,9 @@ load '../helpers/nc.bash'
     local cid hc
     cid=$(compose ps -q nc)
     hc=$(docker inspect --format='{{.Config.Healthcheck.Test}}' "$cid")
+    # Anchor on the real healthcheck so the negative assertion below isn't
+    # vacuously true against an empty/absent HEALTHCHECK string.
+    assert_match "$hc" '"installed":true'
     # Pattern: must NOT include a maintenance:false check
     assert_not_match "$hc" 'maintenance.*false'
 }
@@ -44,6 +47,10 @@ load '../helpers/nc.bash'
     hc_sp=$(docker inspect --format='{{.Config.Healthcheck.StartPeriod}}' "$cid")
     # Compose fixture sets reasonable values; image baseline is 30s/5s/120s.
     log "interval=$hc_iv timeout=$hc_to start_period=$hc_sp"
-    # All non-zero
-    [ "$hc_iv" != "0s" ] && [ "$hc_to" != "0s" ] && [ "$hc_sp" != "0s" ]
+    # All present and non-zero. An absent HEALTHCHECK makes docker inspect emit
+    # an empty string (not "0s"), which the "!= 0s" check alone would pass — so
+    # require non-empty too.
+    [ -n "$hc_iv" ] && [ "$hc_iv" != "0s" ] \
+        && [ -n "$hc_to" ] && [ "$hc_to" != "0s" ] \
+        && [ -n "$hc_sp" ] && [ "$hc_sp" != "0s" ]
 }

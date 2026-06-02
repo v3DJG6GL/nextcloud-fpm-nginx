@@ -47,9 +47,11 @@ teardown() {
         "$NC_IMAGE" >/dev/null
     wait_until 120 5 sh -c "docker exec $CTN curl -fsS http://127.0.0.1/status.php 2>/dev/null | grep -q '\"installed\":true'"
 
-    # PID 1 (supervisord) — the secret should NOT appear in its env.
+    # PID 1 (supervisord) — the secret should NOT appear in its env. The grep
+    # pipeline ends in `|| true` so a "not found" (clean pass) isn't a failure,
+    # which makes a status check tautological — the real assertion is that grep
+    # extracted no matching line.
     run docker exec "$CTN" sh -c 'tr "\0" "\n" < /proc/1/environ | grep -F "pass-from-file-only" || true'
-    assert_status_zero "$status"
     [ -z "$output" ] || {
         log "WARNING: admin password leaked into PID 1 environ: $output"
         return 1
