@@ -159,12 +159,19 @@ sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name_escaped};|" /etc/n
 # HSTS gets its own sanitization rather than prepare_val: an HSTS value
 # legitimately contains ';' (e.g. `max-age=…; includeSubDomains; preload`), so
 # the INI metachar reject doesn't apply. We still trim/strip quotes via
-# clean_val and reject a literal '"' or newline, either of which would close
-# the nginx string early and break `nginx -t` (aborting the entrypoint).
+# clean_val and reject three characters, none of which appear in a valid HSTS
+# value (the grammar is `max-age=<digits>[; includeSubDomains][; preload]`):
+#   - a literal '"' or newline would close the nginx string early and break
+#     `nginx -t` (aborting the entrypoint).
+#   - a '$' is interpolated by nginx: `add_header` evaluates `$var` references
+#     in its value. A defined name (e.g. `$host`, `$request_id`) is silently
+#     substituted at runtime — corrupting the header into an invalid HSTS value
+#     that browsers ignore (a silent security downgrade) — and an undefined one
+#     fails `nginx -t` ("unknown variable"), aborting boot.
 hsts_val=$(clean_val NGINX_HSTS)
 case "$hsts_val" in
-    *'"'* | *"$nl"*)
-        echo "render-overrides: skipping NGINX_HSTS — value contains a '\"' or newline that would break the nginx directive" >&2
+    *'"'* | *'$'* | *"$nl"*)
+        echo "render-overrides: skipping NGINX_HSTS — value contains a '\"', '\$' or newline that would break or inject into the nginx directive" >&2
         ;;
     ?*)
         printf 'add_header Strict-Transport-Security "%s" always;\n' "$hsts_val" > "$hsts_snippet"

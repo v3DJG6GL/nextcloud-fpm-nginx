@@ -95,11 +95,13 @@ SH
 # Regression for the config-injection reject branches in render-overrides.sh:
 # prepare_val() rejects any FPM_*/PHP_* value carrying a ';' (starts an INI
 # comment, truncating the directive) or a newline (would inject a second
-# directive line); NGINX_HSTS gets its own reject for a '"' or newline (either
-# closes the nginx string early). These are the exact guards the printf-not-echo
-# emitter exists to keep effective — yet no test exercised them, so breaking the
-# `*';'*|*"$nl"*` / `*'"'*|*"$nl"*` cases stayed green. Same mktemp sandbox as
-# the empty/quoted test above.
+# directive line); NGINX_HSTS gets its own reject for a '"', '$' or
+# newline ('"'/newline close the nginx string early; '$' is interpolated by
+# nginx in add_header values, silently corrupting the header or failing
+# nginx -t). These are the exact guards the printf-not-echo emitter exists to
+# keep effective — yet no test exercised them, so breaking the
+# `*';'*|*"$nl"*` / `*'"'*|*'$'*|*"$nl"*` cases stayed green. Same mktemp
+# sandbox as the empty/quoted test above.
 @test "render-overrides rejects ';'/newline FPM_* and '\"' NGINX_HSTS (injection guards)" {
     local payload
     payload=$(cat <<'SH'
@@ -127,6 +129,16 @@ echo "--- zz-env.conf ---"
 cat "$sb/fpm/zz-env.conf" 2>/dev/null || echo "(no zz-env.conf)"
 echo "--- nc-hsts.conf ---"
 cat "$sb/snippets/nc-hsts.conf" 2>/dev/null || true
+# Second render: an HSTS value carrying a '$' but NO '"'/newline. nginx
+# interpolates `$var` in add_header values, so without the '$' reject this
+# would be written verbatim and silently emit the interpolated value (or fail
+# nginx -t on an undefined var). The old '"'/newline-only reject let it through.
+echo "=== second render: '\$' HSTS ==="
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    NGINX_HSTS='max-age=1; pwned$host' \
+    "$sb/render.sh" 2>&1
+echo "--- nc-hsts.conf (\$ test) ---"
+cat "$sb/snippets/nc-hsts.conf" 2>/dev/null || true
 rm -rf "$sb"
 SH
 )
@@ -139,7 +151,9 @@ SH
     assert_match "$output" "INI metacharacter"
     # the newline value is rejected — the injected second line never lands
     assert_not_match "$output" "pm\.max_children = 999"
-    # the '"' HSTS value is rejected, with its own skip logged and no header written
+    # both HSTS values are rejected (the '"' one and the '$'-interpolation one),
+    # each with its own skip logged and no header ever written to nc-hsts.conf
     assert_match "$output" "skipping NGINX_HSTS"
     assert_not_match "$output" "Strict-Transport-Security"
+    assert_not_match "$output" "pwned"
 }
