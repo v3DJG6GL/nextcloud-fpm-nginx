@@ -336,6 +336,11 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
+          # Match the publish build: when the staleness gate sets no_cache, test
+          # the freshly-resolved apt layers (libssl/pcre/zlib/…) that will
+          # actually ship, not stale cached ones. Costs a full uncached build on
+          # staleness runs only — digest-drift rebuilds keep no_cache=false.
+          no-cache: ${{ matrix.build.no_cache }}
           tags: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
@@ -408,6 +413,8 @@ jobs:
           context: .
           platforms: linux/arm64
           load: true
+          # See amd64 step: test the no-cache image the staleness gate will ship.
+          no-cache: ${{ matrix.build.no_cache }}
           tags: nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
