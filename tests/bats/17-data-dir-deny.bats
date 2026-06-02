@@ -34,6 +34,8 @@ load '../helpers/http.bash'
 }
 
 @test "/db_structure.xml (occ etc) blocked" {
+    run nc_status_code /db_structure.xml
+    assert_eq "$output" "404"
     run nc_status_code /occ
     assert_eq "$output" "404"
     run nc_status_code /console.php

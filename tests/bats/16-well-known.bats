@@ -30,10 +30,14 @@ load '../helpers/http.bash'
 }
 
 @test "/.well-known/webfinger redirects to /index.php" {
-    # Behavior: location block returns 301 to /index.php$request_uri,
-    # then Nextcloud serves the actual webfinger response (200) at /index.php.
-    run nc_status_code /.well-known/webfinger
+    # Behavior: the ^~ /.well-known block falls through to
+    # `return 301 /index.php$request_uri`, so nginx itself emits the redirect.
+    # Assert the target like the caldav/carddav siblings — a regression that
+    # redirected elsewhere would still be a 301 and slip past a status-only check.
+    local base
+    base=$(nc_host_url)
+    run curl -sS -o /dev/null -D - "${base}/.well-known/webfinger"
     assert_status_zero "$status"
-    # 301 redirect or 200 directly depending on what nginx does — both fine
-    [ "$output" = "301" ] || [ "$output" = "200" ]
+    assert_match "$output" 'HTTP/1\.[01] 301'
+    assert_match "$output" 'Location:.*/index\.php'
 }
