@@ -86,9 +86,6 @@ services:
       # Optional bind-mount overrides:
       # - ./php-local.ini:/usr/local/etc/php/conf.d/99-local.ini:ro
       # - ./www2.conf:/usr/local/etc/php-fpm.d/zzz-local.conf:ro
-      # Enable video thumbnails (MP4/MKV/…). Image ships ffmpeg; this fragment
-      # turns on the OC\Preview\Movie provider (off by default). See README.
-      # - ./movie-previews.config.php:/var/www/html/config/zz-movie-previews.config.php:ro
     networks:
       - backend
       - proxy

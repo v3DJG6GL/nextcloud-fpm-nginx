@@ -13,14 +13,10 @@ ARG NGINX_VERSION=1.26.3-3+deb13u5
 # renovate: datasource=repology depName=debian_13/supervisor versioning=loose
 ARG SUPERVISOR_VERSION=4.2.5-3
 
-# ffmpeg is installed below but intentionally left UNPINNED (unlike nginx/
-# supervisor above). It's the external binary OC\Preview\Movie shells out to
-# for video thumbnails (MP4/MKV/MOV/… — the base nextcloud:*-fpm image ships
-# none). It's not in the Renovate security-pinning set; pinning a Debian
-# ffmpeg + its large codec dependency chain to exact versions would churn
-# constantly for little benefit. Tracks Trixie's ffmpeg on each rebuild.
-# Still requires 'OC\Preview\Movie' in enabledPreviewProviders (config.php) —
-# disabled by default; see the movie-previews config fragment in README.
+# ffmpeg (installed below, intentionally unpinned) is the binary
+# OC\Preview\Movie shells out to for video thumbnails — the base
+# nextcloud:*-fpm image ships none. Kept outside the Renovate pinning set
+# above to avoid constant churn from its large codec dependency chain.
 
 RUN set -eux; \
     apt-get update; \
