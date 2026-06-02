@@ -5,7 +5,7 @@
 # Volumes are persistent for the lifetime of the test (compose down -v at end).
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: nextcloud
       POSTGRES_USER: nextcloud
@@ -17,7 +17,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: ['redis-server', '--save', '', '--appendonly', 'no']
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
