@@ -47,10 +47,15 @@ teardown() {
         -v "$FIXDIR/www2.conf:/usr/local/etc/php-fpm.d/zzz-local.conf:ro" \
         "$NC_IMAGE" >/dev/null
     sleep 6
-    # Despite env setting pm=dynamic max_children=99, fixture's pm=static max_children=7 should win
-    run docker exec "$CTN" cat /usr/local/etc/php-fpm.d/zzz-local.conf
+    # Despite env setting pm=dynamic max_children=99 (rendered into zz-env.conf),
+    # the bind-mount zzz-local.conf sets pm=static max_children=7 and must win.
+    # Re-reading the mounted file would be tautological, so prove precedence the
+    # way php-fpm resolves it: parse the pool files in load (sort) order and take
+    # the LAST pm.max_children directive — that is the effective value.
+    run docker exec "$CTN" sh -c \
+        'for f in $(ls /usr/local/etc/php-fpm.d/*.conf | sort); do grep -H "^[[:space:]]*pm.max_children" "$f"; done | tail -n1'
     assert_status_zero "$status"
-    assert_match "$output" 'pm.max_children = 7'
+    assert_match "$output" 'zzz-local.conf:.*pm.max_children = 7'
     # And the FPM master should have loaded it
     run docker exec "$CTN" php-fpm -t
     assert_status_zero "$status"

@@ -49,8 +49,12 @@ load '../helpers/http.bash'
     base=$(nc_host_url)
     run curl -sS -o /dev/null -w '%{http_code}' -X MKCOL "${base}/remote.php/dav/"
     assert_status_zero "$status"
-    [ "$output" = "401" ] || [ "$output" = "405" ] || [ "$output" = "404" ] || {
-        log "MKCOL returned $output"
+    # Unauthenticated MKCOL is rejected by Sabre's auth plugin (401) before
+    # method handling, so 401 proves nginx forwarded it. 405 must NOT be
+    # accepted here: it is exactly the "nginx/WAF blocked the method" signal
+    # this file exists to catch (see PROPFIND test).
+    [ "$output" = "401" ] || [ "$output" = "404" ] || {
+        log "MKCOL returned $output — expected 401/404, not 405 (nginx blocked it)"
         return 1
     }
 }

@@ -43,9 +43,11 @@ load '../helpers/nc.bash'
         assert_status_zero "$status"
         assert_match "$output" 'OC\\Memcache\\Redis'
     else
-        run nc_config_system_get redis
-        # without redis configured, occ returns the empty array or 'No such value'
-        true  # nothing to assert positively; absence is correct
+        # Absence is the regression to catch: redis must NOT be wired as the
+        # locking backend when SCENARIO_REDIS=false (a stray redis.config.php
+        # fragment would set memcache.locking to OC\Memcache\Redis).
+        run nc_config_system_get memcache.locking
+        assert_not_match "$output" 'OC\\Memcache\\Redis'
     fi
 }
 
