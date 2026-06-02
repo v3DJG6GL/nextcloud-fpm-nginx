@@ -70,6 +70,6 @@ teardown() {
     # README documents. We assert the README documents the pattern and the
     # fragment file format is sane.
     [ -f "$FIXDIR/custom.config.php" ]
-    run grep -E '\*\.config\.php|99-local\.ini' README.md
+    run grep -E '\*\.config\.php' README.md
     assert_status_zero "$status" "README must document bind-mount override pattern"
 }
