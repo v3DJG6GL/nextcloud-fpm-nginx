@@ -22,12 +22,10 @@ set -eu
 
 php_ini=/usr/local/etc/php/conf.d/zz-env-overrides.ini
 fpm_conf=/usr/local/etc/php-fpm.d/zz-env.conf
-nginx_conf=/etc/nginx/conf.d/90-env-overrides.conf
 hsts_snippet=/etc/nginx/snippets/nc-hsts.conf
 
 : > "$php_ini"
 : > "$fpm_conf"
-: > "$nginx_conf"
 # Always (re)create the HSTS snippet — nginx.conf `include`s it by literal path
 # in two scopes, and a missing include fails `nginx -t`. Empty unless NGINX_HSTS
 # is set; truncating each boot also clears a stale value from a previous start.
@@ -136,9 +134,20 @@ server_name="${NGINX_SERVER_NAME:-_}"
 server_name_escaped=$(printf '%s' "$server_name" | sed -e 's/[\\&|]/\\&/g')
 sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name_escaped};|" /etc/nginx/nginx.conf
 
-if [ -n "${NGINX_HSTS:-}" ]; then
-    printf 'add_header Strict-Transport-Security "%s" always;\n' "${NGINX_HSTS}" > "$hsts_snippet"
-fi
+# HSTS gets its own sanitization rather than prepare_val: an HSTS value
+# legitimately contains ';' (e.g. `max-age=…; includeSubDomains; preload`), so
+# the INI metachar reject doesn't apply. We still trim/strip quotes via
+# clean_val and reject a literal '"' or newline, either of which would close
+# the nginx string early and break `nginx -t` (aborting the entrypoint).
+hsts_val=$(clean_val NGINX_HSTS)
+case "$hsts_val" in
+    *'"'* | *"$nl"*)
+        echo "render-overrides: skipping NGINX_HSTS — value contains a '\"' or newline that would break the nginx directive" >&2
+        ;;
+    ?*)
+        printf 'add_header Strict-Transport-Security "%s" always;\n' "$hsts_val" > "$hsts_snippet"
+        ;;
+esac
 
 # --- notify_push (optional) --------------------------------------------------
 
