@@ -8,7 +8,9 @@ nc_curl() {
     local method="$1" path="$2"; shift 2
     local base
     base=$(nc_host_url)
-    curl -fsS -X "$method" -o /dev/stdout -w '\nHTTP:%{http_code}\n' \
+    # No -f: a 4xx/5xx must still emit its body and the HTTP:%{http_code}
+    # trailer (the whole point of this helper) — `--fail` would suppress both.
+    curl -sS -X "$method" -o /dev/stdout -w '\nHTTP:%{http_code}\n' \
         "$@" "${base}${path}"
 }
 

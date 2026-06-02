@@ -39,7 +39,7 @@ teardown() {
     sleep 5
     local exit_code
     exit_code=$(container_exit_code "$CTN")
-    [ "$exit_code" -ne 0 ] || log "expected non-zero exit on downgrade attempt (got $exit_code)"
+    assert_status_nonzero "$exit_code" "expected non-zero exit on downgrade attempt (got $exit_code)"
     run docker logs "$CTN"
     assert_match "$output" 'higher than the docker image|downgrading is not supported'
 

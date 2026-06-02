@@ -40,5 +40,8 @@ nc_supervisorctl_running() {
 
 # nc_supervisorctl_absent <program> → exit 0 if the program is NOT defined
 nc_supervisorctl_absent() {
-    ! compose_exec supervisorctl status "$1" >/dev/null 2>&1
+    # Gate on the explicit "no such process" message, not the exit code: a
+    # defined-but-down program (FATAL/BACKOFF/STOPPED) also makes
+    # `supervisorctl status` exit non-zero, which would wrongly read as absent.
+    compose_exec supervisorctl status "$1" 2>&1 | grep -q 'no such process'
 }
