@@ -59,10 +59,15 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
         if [ -f /etc/gshadow ]; then
             sed -i -E "s|^(www-data:[^:]*:)[0-9]*:|\\1${target_gid}:|" /etc/gshadow || true
         fi
+        # Also rewrite www-data's PRIMARY gid (4th field) in /etc/passwd.
+        # Without this, setting PGID while leaving PUID unset (uid unchanged,
+        # so the passwd edit below is skipped) leaves the process running with
+        # the old primary group even though files get chowned to target_gid.
+        sed -i -E "s|^(www-data:[^:]*:[0-9]+:)[0-9]+:|\\1${target_gid}:|" /etc/passwd
     fi
     if [ "$target_uid" != "$current_uid" ]; then
         echo "entrypoint: usermod www-data $current_uid -> $target_uid (direct /etc/passwd edit, no implicit recurse)" >&2
-        sed -i -E "s|^(www-data:[^:]*:)[0-9]+:[0-9]+:|\\1${target_uid}:${target_gid}:|" /etc/passwd
+        sed -i -E "s|^(www-data:[^:]*:)[0-9]+:|\\1${target_uid}:|" /etc/passwd
     fi
 
     # --- Dual-sentinel-gated recursive chowns -----------------------------
@@ -106,6 +111,12 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
             echo $CONFIG["datadirectory"] ?? "";
         ' 2>/dev/null) || data_dir=""
     fi
+
+    # Strip a trailing slash so the exact-match `-path "$data_dir" -prune`
+    # below (and the `/var/www/*` case globs) match the paths find/stat
+    # actually generate. A trailing slash (e.g. NEXTCLOUD_DATA_DIR=/path/data/)
+    # makes the prune pattern never match, silently walking the whole tree.
+    [ -n "$data_dir" ] && [ "$data_dir" != "/" ] && data_dir="${data_dir%/}"
 
     # 2. Check the /var/www sentinel.
     www_sentinel=/var/www/html/version.php
