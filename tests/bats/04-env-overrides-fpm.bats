@@ -44,11 +44,12 @@ load '../helpers/compose.bash'
     payload=$(cat <<'SH'
 set -eu
 sb=$(mktemp -d)
-mkdir -p "$sb/php" "$sb/fpm" "$sb/nginx-conf" "$sb/sv"
+mkdir -p "$sb/php" "$sb/fpm" "$sb/nginx-conf" "$sb/snippets" "$sb/sv"
 cp /etc/nginx/nginx.conf "$sb/nginx.conf"
 sed -e "s|/usr/local/etc/php/conf.d/|$sb/php/|g" \
     -e "s|/usr/local/etc/php-fpm.d/|$sb/fpm/|g" \
     -e "s|/etc/nginx/conf.d/|$sb/nginx-conf/|g" \
+    -e "s|/etc/nginx/snippets/|$sb/snippets/|g" \
     -e "s|/etc/nginx/nginx.conf|$sb/nginx.conf|g" \
     -e "s|/etc/supervisor/conf.d/|$sb/sv/|g" \
     /usr/local/bin/render-overrides.sh > "$sb/render.sh"

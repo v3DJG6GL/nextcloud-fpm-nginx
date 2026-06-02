@@ -30,6 +30,12 @@ RUN set -eux; \
     ln -sf /dev/stderr /var/log/nginx/error.log; \
     mkdir -p /etc/supervisor/conf.d /etc/nginx/conf.d /etc/nginx/snippets /var/log/supervisor
 
+# nginx.conf `include`s nc-hsts.conf by literal path; render-overrides.sh
+# (re)creates it at boot, but `nginx -t` also lints the static image (CST)
+# BEFORE the entrypoint runs, and a missing include is a fatal emerg. Ship an
+# empty stub so the un-booted image passes nginx -t.
+RUN : > /etc/nginx/snippets/nc-hsts.conf
+
 # Install the Nextcloud notify_push binary (companion to the upstream
 # `notify_push` PHP app that ships in the official image). Disabled by default;
 # opt in via NOTIFY_PUSH_ENABLE=true env var (see scripts/render-overrides.sh).
