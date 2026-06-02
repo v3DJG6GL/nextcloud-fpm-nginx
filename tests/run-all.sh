@@ -149,4 +149,11 @@ BATS_REPORT="tests/reports/${COMPOSE_PROJECT_NAME}.xml"
 # user can override with BATS_JOBS=4 ./tests/run-all.sh
 : "${BATS_JOBS:=1}"
 
-bats -j "$BATS_JOBS" --report-formatter junit -o tests/reports/ "${BATS_FILES[@]}"
+rc=0
+bats -j "$BATS_JOBS" --report-formatter junit -o tests/reports/ "${BATS_FILES[@]}" || rc=$?
+# bats' junit formatter always writes the fixed name tests/reports/report.xml;
+# rename it to the per-run unique name (matching the .log artifact above) so
+# concurrent runs in the same checkout don't clobber each other. CI collects
+# tests/reports/*.xml, so the renamed file is still picked up.
+[ -f tests/reports/report.xml ] && mv -f tests/reports/report.xml "$BATS_REPORT"
+exit "$rc"
