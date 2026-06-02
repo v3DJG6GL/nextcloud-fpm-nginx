@@ -45,7 +45,8 @@ load '../helpers/nc.bash'
     hc_iv=$(docker inspect --format='{{.Config.Healthcheck.Interval}}' "$cid")
     hc_to=$(docker inspect --format='{{.Config.Healthcheck.Timeout}}' "$cid")
     hc_sp=$(docker inspect --format='{{.Config.Healthcheck.StartPeriod}}' "$cid")
-    # Compose fixture sets reasonable values; image baseline is 30s/5s/120s.
+    # Compose fixture sets reasonable values; image baseline is
+    # interval=30s/timeout=5s/start-period=14400s (see Dockerfile HEALTHCHECK).
     log "interval=$hc_iv timeout=$hc_to start_period=$hc_sp"
     # All present and non-zero. An absent HEALTHCHECK makes docker inspect emit
     # an empty string (not "0s"), which the "!= 0s" check alone would pass — so
