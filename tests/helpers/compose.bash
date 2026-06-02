@@ -38,7 +38,10 @@ occ() {
 # Service port mapping for the host. NC service publishes on a host port.
 nc_host_url() {
     local port
-    port=$(compose port nc 80 2>/dev/null | awk -F: '{print $NF}')
+    # `compose port nc 80` emits one line per published family; on a dual-stack
+    # daemon that is two lines (0.0.0.0:PORT and [::]:PORT). head -n1 keeps a
+    # single port — without it the URL becomes "http://127.0.0.1:PORT\nPORT".
+    port=$(compose port nc 80 2>/dev/null | head -n1 | awk -F: '{print $NF}')
     if [ -z "$port" ]; then
         log "could not determine host port for nc:80"
         return 1
