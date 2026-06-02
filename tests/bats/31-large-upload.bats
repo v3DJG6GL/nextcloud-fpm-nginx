@@ -25,12 +25,12 @@ load '../helpers/compose.bash'
 }
 
 @test "fastcgi_buffers 64 4K (NC required to avoid response truncation)" {
-    run compose_exec grep -E 'fastcgi_buffers 64 4K;' /etc/nginx/nginx.conf
+    run compose_exec grep -E '^[[:space:]]*fastcgi_buffers[[:space:]]+64[[:space:]]+4K;' /etc/nginx/nginx.conf
     assert_status_zero "$status"
 }
 
 @test "fastcgi_request_buffering off (stream upload bodies; no overlayfs spooling)" {
-    run compose_exec grep -E 'fastcgi_request_buffering off;' /etc/nginx/nginx.conf
+    run compose_exec grep -E '^[[:space:]]*fastcgi_request_buffering[[:space:]]+off;' /etc/nginx/nginx.conf
     assert_status_zero "$status"
 }
 
@@ -51,7 +51,7 @@ load '../helpers/compose.bash'
 }
 
 @test "fastcgi_max_temp_file_size = 0 (no spooling to disk during upload)" {
-    run compose_exec grep -E 'fastcgi_max_temp_file_size 0;' /etc/nginx/nginx.conf
+    run compose_exec grep -E '^[[:space:]]*fastcgi_max_temp_file_size[[:space:]]+0;' /etc/nginx/nginx.conf
     assert_status_zero "$status"
 }
 
