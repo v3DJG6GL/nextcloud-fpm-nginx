@@ -557,7 +557,7 @@ jobs:
           push: true
           pull: true
           # no-cache=true skips ALL build cache. Set by the staleness branch of
-          # the compute-matrix gate (weekly cron, image >=14d old) so apt
+          # the compute-matrix gate (daily cron, image >=14d old) so apt
           # re-resolves transitive deps (libssl, pcre, zlib, …) against the
           # current Debian repos. Digest-drift rebuilds leave this false — the
           # cache is naturally invalidated by the new parent layer anyway.
