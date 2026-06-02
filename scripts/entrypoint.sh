@@ -255,7 +255,12 @@ fi
 # --- UMASK -------------------------------------------------------------------
 # Propagated to supervisord and all its children (php-fpm, nginx, etc.).
 if [ -n "${UMASK:-}" ]; then
-    umask "$UMASK"
+    # Tolerate a malformed value: under `set -e` a bad `umask` arg (e.g.
+    # UMASK=abc) returns non-zero and would abort the entrypoint before
+    # supervisord ever starts — bricking the container on a fat-fingered
+    # optional env var. Warn and continue, matching the chown handling above.
+    umask "$UMASK" \
+        || echo "entrypoint: WARNING — invalid UMASK='$UMASK', ignoring (using inherited umask)" >&2
 fi
 
 # --- Render env-var-driven config overrides ---------------------------------
