@@ -36,6 +36,22 @@ if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then
     current_uid="$(id -u www-data)"
     current_gid="$(id -g www-data)"
 
+    # Reject non-numeric PUID/PGID before they reach the sed/chown below.
+    # A stray name or typo (e.g. PGID=users) would otherwise be written
+    # verbatim into /etc/passwd + /etc/group (corrupting both files), and a
+    # value containing sed's '|' delimiter (e.g. PUID='1000|0') would abort
+    # the entrypoint under `set -e`, bricking the container on a fat-fingered
+    # optional env var. Match the UMASK handling: warn and fall back to the
+    # current id so the reassignment (and its chown) is simply skipped.
+    case "$target_uid" in ''|*[!0-9]*)
+        echo "entrypoint: WARNING — non-numeric PUID='${PUID:-}', keeping current uid $current_uid" >&2
+        target_uid="$current_uid" ;;
+    esac
+    case "$target_gid" in ''|*[!0-9]*)
+        echo "entrypoint: WARNING — non-numeric PGID='${PGID:-}', keeping current gid $current_gid" >&2
+        target_gid="$current_gid" ;;
+    esac
+
     # Direct /etc/passwd + /etc/group edits instead of usermod/groupmod.
     #
     # Modern shadow-utils' `usermod -u` does an IMPLICIT recursive

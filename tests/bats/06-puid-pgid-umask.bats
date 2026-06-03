@@ -371,6 +371,31 @@ teardown() {
     assert_match "$output" 'direct /etc/group edit, no implicit recurse'
 }
 
+# Regression: a non-numeric PUID/PGID (a group/user NAME like PGID=users, or a
+# typo containing sed's '|' delimiter) must NOT be written verbatim into
+# /etc/passwd+/etc/group (corruption) nor abort the entrypoint under `set -e`
+# (the '|' would break the sed s||| and brick the container). Like UMASK, the
+# entrypoint warns and falls back to the current id — www-data stays uid 33.
+@test "non-numeric PGID is rejected (no corruption, container still boots)" {
+    docker run -d --name "$PUID_TEST_NAME" \
+        -e PGID=users \
+        -e SQLITE_DATABASE=nc.db \
+        -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
+        -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
+        "$NC_IMAGE" >/dev/null
+    sleep 4
+    run docker logs "$PUID_TEST_NAME"
+    assert_status_zero "$status"
+    assert_match "$output" "non-numeric PGID='users', keeping current gid"
+    # www-data must still resolve (passwd/group not corrupted) and stay at 33.
+    run docker exec "$PUID_TEST_NAME" id -u www-data
+    assert_status_zero "$status"
+    assert_eq "$output" "33"
+    run docker exec "$PUID_TEST_NAME" id -g www-data
+    assert_status_zero "$status"
+    assert_eq "$output" "33"
+}
+
 @test "UMASK propagates to child processes" {
     docker run -d --name "$PUID_TEST_NAME" \
         -e UMASK=027 \
