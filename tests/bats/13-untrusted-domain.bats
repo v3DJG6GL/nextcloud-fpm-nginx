@@ -17,11 +17,15 @@ load '../helpers/nc.bash'
 
 @test "second trusted domain registered (guards #1666 space-split)" {
     # The fixture sets NEXTCLOUD_TRUSTED_DOMAINS="localhost example.test".
-    # #1666 wrote ONLY index 0, so this index-1 assertion is what actually
-    # exercises the space-split regression the file is named for.
-    run nc_config_system_get trusted_domains 1
+    # #1666 wrote ONLY the first space-separated entry, so this asserts the
+    # SECOND entry (example.test) made it in — the space-split regression the
+    # file is named for. Assert by membership in the full trusted_domains array
+    # rather than a fixed index: the upstream entrypoint writes env-supplied
+    # domains starting at index 1 (index 0 is the install default 'localhost'),
+    # so example.test lands at index 2, not 1.
+    run nc_config_system_get trusted_domains
     assert_status_zero "$status"
-    assert_eq "$output" "example.test"
+    assert_match "$output" 'example\.test'
 }
 
 @test "/ with trusted Host returns 2xx or 3xx (not 400 untrusted-domain)" {
