@@ -61,8 +61,13 @@ nl='
 # prepare_val KEY VAR — echoes a safe value for KEY, or nothing (and returns 1)
 # when the override should be skipped. Skips empty/whitespace/quotes-only values,
 # and values carrying an INI metacharacter — a `;` (starts a comment, truncating
-# the directive) or a newline (would inject a second line). Shared by the PHP-ini
-# and FPM-pool emitters below.
+# the directive), a newline (would inject a second line), or a stray `"`/`'`.
+# clean_val only strips a *matched* surrounding pair, so an unbalanced lone quote
+# (e.g. FPM_SLOWLOG='"') survives the trim and would emit an unterminated quoted
+# value — php-fpm's pool parser rejects that with a syntax error and refuses to
+# start, the exact crash class clean_val exists to prevent. No managed PHP_*/FPM_*
+# value (timezone, opcache/pm numerics+enums, slowlog path, timeouts) legitimately
+# contains a quote. Shared by the PHP-ini and FPM-pool emitters below.
 prepare_val() {
     key=$1; var=$2
     val=$(clean_val "$var")
@@ -74,8 +79,8 @@ prepare_val() {
         return 1
     fi
     case "$val" in
-        *';'* | *"$nl"*)
-            echo "render-overrides: skipping ${key} — \$${var} contains an INI metacharacter (';' or newline)" >&2
+        *';'* | *'"'* | *"'"* | *"$nl"*)
+            echo "render-overrides: skipping ${key} — \$${var} contains an INI metacharacter (';', quote, or newline)" >&2
             return 1
             ;;
     esac

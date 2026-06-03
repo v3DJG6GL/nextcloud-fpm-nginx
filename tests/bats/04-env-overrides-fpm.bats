@@ -37,6 +37,12 @@ load '../helpers/compose.bash'
 # clean_val() in render-overrides.sh should strip surrounding quotes + trim
 # whitespace and silently skip the directive when nothing is left.
 #
+# Also covers the unbalanced lone-quote case (FPM_REQUEST_TERMINATE_TIMEOUT='"'):
+# clean_val only strips a *matched* pair, so a single stray quote survives the
+# trim and the pre-fix emitter wrote `request_terminate_timeout = "` — an
+# unterminated quoted value php-fpm rejects with a syntax error, refusing to
+# start. prepare_val()'s metacharacter reject must drop it like the ';' case.
+#
 # Runs in a mktemp sandbox so it doesn't clobber the live container's
 # zz-env.conf / nginx.conf (which subsequent tests depend on).
 @test "render-overrides skips empty/quoted/whitespace FPM_* and still validates" {
@@ -59,6 +65,7 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     FPM_SLOWLOG="''" \
     FPM_REQUEST_SLOWLOG_TIMEOUT="   " \
     FPM_PM_MAX_REQUESTS='""' \
+    FPM_REQUEST_TERMINATE_TIMEOUT='"' \
     "$sb/render.sh" 2>&1
 echo "--- zz-env.conf ---"
 cat "$sb/fpm/zz-env.conf"
@@ -88,6 +95,8 @@ SH
     assert_not_match "$output" "^slowlog ="
     assert_not_match "$output" "^request_slowlog_timeout ="
     assert_not_match "$output" "^pm\.max_requests ="
+    # the unbalanced lone-quote value must NOT appear (would be unterminated)
+    assert_not_match "$output" "^request_terminate_timeout ="
     # and php-fpm must accept the resulting config
     assert_match "$output" "test is successful"
 }
