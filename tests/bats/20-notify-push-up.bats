@@ -18,10 +18,12 @@ setup() {
     nc_supervisorctl_running notify-push
 }
 
-@test "notify_push binary version matches pinned release (1.3.2)" {
+@test "notify_push binary version matches the pinned NOTIFY_PUSH_VERSION" {
     run compose_exec /usr/local/bin/notify_push --version
     assert_status_zero "$status"
-    assert_match "$output" 'notify_push 1\.3\.2'
+    # Version kept in lockstep with the Dockerfile NOTIFY_PUSH_VERSION ARG by the
+    # notify_push customManager in .github/renovate.json — do not hand-edit.
+    assert_match "$output" 'notify_push 1.3.2'
 }
 
 @test "base_endpoint stored in Nextcloud config (or setup succeeded)" {

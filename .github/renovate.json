@@ -14,6 +14,20 @@
   "automergeStrategy": "squash",
   "platformAutomerge": true,
   "ignoreDeps": ["nextcloud"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Keep the notify_push --version assertions in the bats + container-structure tests in lockstep with the Dockerfile NOTIFY_PUSH_VERSION ARG, so a version bump updates all three sites in one PR instead of failing CI.",
+      "managerFilePatterns": [
+        "tests/bats/20-notify-push-up.bats",
+        "tests/cst/notify_push.yaml"
+      ],
+      "matchStrings": ["notify_push (?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "nextcloud/notify_push",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ],
   "packageRules": [
     {
       "description": "Group all GitHub Actions bumps into one PR.",
