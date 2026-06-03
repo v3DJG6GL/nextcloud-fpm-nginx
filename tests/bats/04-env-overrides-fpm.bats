@@ -104,14 +104,16 @@ SH
 # Regression for the config-injection reject branches in render-overrides.sh:
 # prepare_val() rejects any FPM_*/PHP_* value carrying a ';' (starts an INI
 # comment, truncating the directive) or a newline (would inject a second
-# directive line); NGINX_HSTS gets its own reject for a '"', '$' or
+# directive line); NGINX_HSTS gets its own reject for a '"', '$', '\' or
 # newline ('"'/newline close the nginx string early; '$' is interpolated by
 # nginx in add_header values, silently corrupting the header or failing
-# nginx -t); NGINX_SERVER_NAME rejects a newline, ';' or '#' (';' injects a
-# directive, '#' comments out the ';' terminator so nginx swallows the next
-# directive). These are the exact guards the printf-not-echo emitter exists to
-# keep effective — yet no test exercised them, so breaking the
-# `*';'*|*"$nl"*` / `*'"'*|*'$'*|*"$nl"*` / `*"$nl"*|*';'*|*'#'*` cases stayed
+# nginx -t; '\' escapes the closing quote of the raw "..." literal, running it
+# on through `always;` → nginx -t fails); NGINX_SERVER_NAME rejects a newline,
+# ';' or '#' (';' injects a directive, '#' comments out the ';' terminator so
+# nginx swallows the next directive). These are the exact guards the
+# printf-not-echo emitter exists to keep effective — yet no test exercised
+# them, so breaking the
+# `*';'*|*"$nl"*` / `*'"'*|*'$'*|*'\'*|*"$nl"*` / `*"$nl"*|*';'*|*'#'*` cases stayed
 # green. Same mktemp sandbox as the empty/quoted test above.
 @test "render-overrides rejects ';'/newline FPM_* and '\"' NGINX_HSTS (injection guards)" {
     local payload
@@ -162,6 +164,17 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     "$sb/render.sh" 2>&1
 echo "--- nginx.conf server_name (# test) ---"
 grep -E '^\s*server_name ' "$sb/nginx.conf" 2>/dev/null || true
+# Fourth render: an HSTS value ending in '\' but with NO '"'/'$'/newline. The
+# value is emitted raw into a "..." literal, so a trailing backslash escapes the
+# closing quote (`"max-age=1; trapdoor\"`), running the string on through the
+# `always;` terminator → nginx -t "unexpected end of file" → boot aborts. The
+# old '"'/'$'/newline-only reject let it through; the '\' reject must drop it.
+echo "=== fourth render: '\\' HSTS ==="
+env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    NGINX_HSTS='max-age=1; trapdoor\' \
+    "$sb/render.sh" 2>&1
+echo "--- nc-hsts.conf (\\ test) ---"
+cat "$sb/snippets/nc-hsts.conf" 2>/dev/null || true
 rm -rf "$sb"
 SH
 )
@@ -174,11 +187,13 @@ SH
     assert_match "$output" "INI metacharacter"
     # the newline value is rejected — the injected second line never lands
     assert_not_match "$output" "pm\.max_children = 999"
-    # both HSTS values are rejected (the '"' one and the '$'-interpolation one),
-    # each with its own skip logged and no header ever written to nc-hsts.conf
+    # all three HSTS values are rejected (the '"' one, the '$'-interpolation one,
+    # and the trailing-'\' run-on one), each with its own skip logged and no
+    # header ever written to nc-hsts.conf
     assert_match "$output" "skipping NGINX_HSTS"
     assert_not_match "$output" "Strict-Transport-Security"
     assert_not_match "$output" "pwned"
+    assert_not_match "$output" "trapdoor"
     # the '#' server_name is rejected, with the ignore logged, and the patched
     # nginx.conf falls back to `server_name _;` — the dangerous value never lands
     assert_match "$output" "ignoring NGINX_SERVER_NAME"

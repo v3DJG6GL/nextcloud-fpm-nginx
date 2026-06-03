@@ -172,7 +172,7 @@ sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name_escaped};|" /etc/n
 # HSTS gets its own sanitization rather than prepare_val: an HSTS value
 # legitimately contains ';' (e.g. `max-age=…; includeSubDomains; preload`), so
 # the INI metachar reject doesn't apply. We still trim/strip quotes via
-# clean_val and reject three characters, none of which appear in a valid HSTS
+# clean_val and reject four characters, none of which appear in a valid HSTS
 # value (the grammar is `max-age=<digits>[; includeSubDomains][; preload]`):
 #   - a literal '"' or newline would close the nginx string early and break
 #     `nginx -t` (aborting the entrypoint).
@@ -181,10 +181,16 @@ sed -i "s|^\(\s*\)server_name .*;|\1server_name ${server_name_escaped};|" /etc/n
 #     substituted at runtime — corrupting the header into an invalid HSTS value
 #     that browsers ignore (a silent security downgrade) — and an undefined one
 #     fails `nginx -t` ("unknown variable"), aborting boot.
+#   - a '\' is nginx's escape character inside a quoted string. The value is
+#     emitted raw into a "..." literal (unlike server_name, which is sed-escaped
+#     so its backslashes are doubled), so a trailing '\' escapes the closing
+#     quote: `"max-age=1\"` runs the string on through `always;` and the next
+#     directive, yielding "unexpected end of file" — `nginx -t` fails and boot
+#     aborts under `set -e`. (Verified: `nginx -t` rejects the run-on string.)
 hsts_val=$(clean_val NGINX_HSTS)
 case "$hsts_val" in
-    *'"'* | *'$'* | *"$nl"*)
-        echo "render-overrides: skipping NGINX_HSTS — value contains a '\"', '\$' or newline that would break or inject into the nginx directive" >&2
+    *'"'* | *'$'* | *'\'* | *"$nl"*)
+        echo "render-overrides: skipping NGINX_HSTS — value contains a '\"', '\$', '\\' or newline that would break or inject into the nginx directive" >&2
         ;;
     ?*)
         printf 'add_header Strict-Transport-Security "%s" always;\n' "$hsts_val" > "$hsts_snippet"
