@@ -40,7 +40,7 @@ RUN : > /etc/nginx/snippets/nc-hsts.conf
 # `notify_push` PHP app that ships in the official image). Disabled by default;
 # opt in via NOTIFY_PUSH_ENABLE=true env var (see scripts/render-overrides.sh).
 # renovate: datasource=github-releases depName=nextcloud/notify_push extractVersion=^v(?<version>.+)$
-ARG NOTIFY_PUSH_VERSION=1.3.2
+ARG NOTIFY_PUSH_VERSION=1.3.3
 RUN set -eux; \
     case "$(uname -m)" in \
         x86_64)  rust_arch=x86_64 ;; \
