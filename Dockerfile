@@ -50,7 +50,13 @@ RUN set -eux; \
     curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors -o /usr/local/bin/notify_push \
         "https://github.com/nextcloud/notify_push/releases/download/v${NOTIFY_PUSH_VERSION}/notify_push-${rust_arch}-unknown-linux-musl"; \
     chmod 0755 /usr/local/bin/notify_push; \
-    /usr/local/bin/notify_push --version
+    # Single source of truth: fail the build if the downloaded binary does not
+    # report the pinned NOTIFY_PUSH_VERSION (wrong/empty/redirected download).
+    # Downstream tests only assert the version *shape*, so a bump touches this
+    # ARG and nothing else.
+    ver="$(/usr/local/bin/notify_push --version)"; \
+    [ "$ver" = "notify_push ${NOTIFY_PUSH_VERSION}" ] \
+        || { echo "notify_push version mismatch: got '$ver', want 'notify_push ${NOTIFY_PUSH_VERSION}'" >&2; exit 1; }
 
 COPY nginx.conf                                     /etc/nginx/nginx.conf
 COPY snippets/nc-security-headers.conf              /etc/nginx/snippets/nc-security-headers.conf

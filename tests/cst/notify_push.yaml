@@ -1,13 +1,14 @@
 schemaVersion: 2.0.0
 
 commandTests:
-  # Version kept in lockstep with the Dockerfile NOTIFY_PUSH_VERSION ARG by the
-  # notify_push customManager in .github/renovate.json — do not hand-edit.
-  - name: notify_push binary reports the expected version
+  # Shape-only: proves the binary runs and reports a semver. The EXACT version
+  # is asserted == NOTIFY_PUSH_VERSION at build time in the Dockerfile, the
+  # single source of truth — so this never needs a bump.
+  - name: notify_push binary reports a valid version
     command: /usr/local/bin/notify_push
     args: ['--version']
     exitCode: 0
-    expectedOutput: ['notify_push 1.3.2']
+    expectedOutput: ['notify_push [0-9]+\.[0-9]+\.[0-9]+']
 
   - name: notify-push-wrapper invokes the binary path correctly
     command: grep
