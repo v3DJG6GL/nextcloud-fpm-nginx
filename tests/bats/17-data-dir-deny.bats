@@ -15,29 +15,36 @@ load '../helpers/http.bash'
 
 @test "/config is blocked" {
     run nc_status_code /config
+    assert_status_zero "$status"
     assert_eq "$output" "404"
 }
 
 @test "/lib is blocked" {
     run nc_status_code /lib
+    assert_status_zero "$status"
     assert_eq "$output" "404"
 }
 
 @test "/3rdparty is blocked" {
     run nc_status_code /3rdparty
+    assert_status_zero "$status"
     assert_eq "$output" "404"
 }
 
 @test "/templates is blocked" {
     run nc_status_code /templates
+    assert_status_zero "$status"
     assert_eq "$output" "404"
 }
 
 @test "/db_structure.xml (occ etc) blocked" {
     run nc_status_code /db_structure.xml
+    assert_status_zero "$status"
     assert_eq "$output" "404"
     run nc_status_code /occ
+    assert_status_zero "$status"
     assert_eq "$output" "404"
     run nc_status_code /console.php
+    assert_status_zero "$status"
     assert_eq "$output" "404"
 }

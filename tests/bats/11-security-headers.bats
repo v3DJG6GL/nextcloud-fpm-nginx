@@ -14,21 +14,25 @@ load '../helpers/http.bash'
 
 @test "X-Content-Type-Options: nosniff" {
     run nc_headers /
+    assert_status_zero "$status"
     assert_match "$output" 'X-Content-Type-Options: nosniff'
 }
 
 @test "X-Frame-Options: SAMEORIGIN" {
     run nc_headers /
+    assert_status_zero "$status"
     assert_match "$output" 'X-Frame-Options: SAMEORIGIN'
 }
 
 @test "X-Permitted-Cross-Domain-Policies: none" {
     run nc_headers /
+    assert_status_zero "$status"
     assert_match "$output" 'X-Permitted-Cross-Domain-Policies: none'
 }
 
 @test "X-Robots-Tag: noindex, nofollow" {
     run nc_headers /
+    assert_status_zero "$status"
     assert_match "$output" 'X-Robots-Tag: noindex, nofollow'
 }
 
@@ -48,16 +52,19 @@ load '../helpers/http.bash'
 
 @test "Content-Security-Policy header emitted by Nextcloud PHP" {
     run nc_headers /
+    assert_status_zero "$status"
     assert_match "$output" 'Content-Security-Policy:'
 }
 
 @test "X-Powered-By header stripped (fastcgi_hide_header)" {
     run nc_headers /
+    assert_status_zero "$status"
     assert_not_match "$output" '^X-Powered-By:'
 }
 
 @test "Server header has no version info (server_tokens off)" {
     run nc_headers /
+    assert_status_zero "$status"
     # nginx default is "Server: nginx/1.26.x"; server_tokens off → "Server: nginx"
     assert_match "$output" '^Server: nginx\r?$'
 }

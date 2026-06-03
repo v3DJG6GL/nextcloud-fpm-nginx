@@ -33,8 +33,11 @@ load '../helpers/nc.bash'
 }
 
 @test "/ with untrusted Host returns 400 with 'Access through untrusted domain' body" {
-    local base body
-    base=$(nc_host_url)
-    body=$(curl -sS -H 'Host: evil.example.com' "${base}/login")
-    assert_match "$body" 'Access through untrusted domain'
+    # nc_curl appends an HTTP:%{http_code} trailer so we verify the status the
+    # test name promises (400), not just the body text — a regression that
+    # served the page with a 2xx would otherwise pass on the body match alone.
+    run nc_curl GET /login -H 'Host: evil.example.com'
+    assert_status_zero "$status"
+    assert_match "$output" 'HTTP:400'
+    assert_match "$output" 'Access through untrusted domain'
 }
