@@ -134,8 +134,14 @@ jobs:
           # the whole cell ("not found"). Drop a major only when its base tag
           # is GENUINELY absent (registry says MANIFEST_UNKNOWN / 404); on a
           # transient error keep it (fail-open) so a hiccup never silently
-          # narrows the matrix. The next scheduled run's digest gate picks the
-          # major back up automatically once the tag lands.
+          # narrows the matrix.
+          #
+          # On a manual `workflow_dispatch` we don't make the operator wait out
+          # the race: if the exact patch isn't published yet we fall back to the
+          # latest published <major>.x.y-fpm patch so the "Run workflow" button
+          # always yields a buildable matrix. Scheduled/push/PR runs keep waiting
+          # — the next digest gate picks up the new patch automatically once the
+          # tag lands.
           base_status() {
             # 0 = exists, 1 = genuinely absent, 2 = undetermined (transient)
             local ref="$1" out
@@ -152,6 +158,17 @@ jobs:
             return 2
           }
 
+          # Newest published <major>.x.y-fpm patch on Docker Hub (empty if none).
+          # `-fpm$` anchor excludes -fpm-alpine and bare <major>-fpm rolling tags.
+          latest_published_patch() {
+            local major="$1"
+            crane ls docker.io/library/nextcloud 2>/dev/null \
+              | grep -E "^${major}\.[0-9]+\.[0-9]+-fpm$" \
+              | sed 's/-fpm$//' \
+              | sort -V \
+              | tail -n1 || true
+          }
+
           echo "Verifying upstream base images are published…"
           published='[]'
           while IFS= read -r row; do
@@ -161,7 +178,18 @@ jobs:
             if base_status "$ref"; then
               published=$(jq -c --argjson r "$row" '. + [$r]' <<<"$published")
             elif [ $? -eq 1 ]; then
-              echo "::warning::[$major] $ref not published on Docker Hub yet — skipping until it lands"
+              if [ "$EVENT" = "workflow_dispatch" ]; then
+                fallback=$(latest_published_patch "$major")
+                if [ -n "$fallback" ] && base_status "docker.io/library/nextcloud:${fallback}-fpm"; then
+                  echo "::warning::[$major] $ref not published yet — manual dispatch: building latest published patch ${fallback}-fpm instead"
+                  row=$(jq -c --arg v "$fallback" '.version = $v' <<<"$row")
+                  published=$(jq -c --argjson r "$row" '. + [$r]' <<<"$published")
+                else
+                  echo "::warning::[$major] $ref not published and no published ${major}.x.y-fpm patch found — skipping"
+                fi
+              else
+                echo "::warning::[$major] $ref not published on Docker Hub yet — skipping until it lands"
+              fi
             else
               echo "::warning::[$major] could not verify $ref (transient registry error) — keeping (fail-open)"
               published=$(jq -c --argjson r "$row" '. + [$r]' <<<"$published")
