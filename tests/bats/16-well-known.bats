@@ -19,6 +19,7 @@ load '../helpers/http.bash'
     local base
     base=$(nc_host_url)
     run curl -sS -o /dev/null -D - "${base}/.well-known/carddav"
+    assert_status_zero "$status"
     assert_match "$output" 'HTTP/1\.[01] 301'
     assert_match "$output" 'Location:.*/remote\.php/dav/'
 }
