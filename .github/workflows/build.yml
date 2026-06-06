@@ -104,6 +104,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          # GHCR repository paths are lowercase, but github.repository_owner can
+          # be mixed-case (e.g. v3DJG6GL). crane rejects an upper-case ref, and
+          # the digest gate below swallows that error (2>/dev/null) — reading it
+          # as "ghcr-tag-missing" and forcing a full rebuild+push of every major
+          # on EVERY scheduled run. Lower-case once here so the gate finds our
+          # own published image. (The publish job is unaffected: metadata-action
+          # lower-cases the image ref itself.)
+          owner_lc=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+
           blocklist_file=.github/versions-blocklist.txt
           if [ -f "$blocklist_file" ]; then
             # grep -v returns 1 when nothing matches (all-comment file); tolerate it.
@@ -231,7 +240,7 @@ jobs:
             while IFS= read -r row; do
               major=$(jq -r '.major' <<<"$row")
               version=$(jq -r '.version' <<<"$row")
-              ghcr_ref="ghcr.io/${OWNER}/${IMAGE}:v${version}"
+              ghcr_ref="ghcr.io/${owner_lc}/${IMAGE}:v${version}"
               upstream_ref="docker.io/library/nextcloud:${version}-fpm"
 
               keep_reason=""
@@ -244,16 +253,25 @@ jobs:
                 echo "::warning::[$major] could not resolve $upstream_ref — including in build (fail-open)"
                 keep_reason="upstream-resolve-failed"
               else
-                our_cfg=$(crane config "$ghcr_ref" 2>/dev/null || true)
-                if [ -z "$our_cfg" ]; then
-                  keep_reason="ghcr-tag-missing"
-                else
+                # Resolve our own published config. Distinguish a genuine
+                # "not published yet" (404 / MANIFEST_UNKNOWN → legitimate
+                # ghcr-tag-missing rebuild, e.g. a brand-new major) from ANY
+                # other crane failure (bad ref, auth, transient registry error).
+                # The error class previously fell through to "ghcr-tag-missing"
+                # and silently forced a rebuild every run — capture stderr and
+                # surface it loudly instead so a future ref bug can't hide.
+                if our_cfg=$(crane config "$ghcr_ref" 2>config_err); then
                   our_digest=$(jq -r '.config.Labels["org.opencontainers.image.base.digest"] // empty' <<<"$our_cfg")
                   if [ -z "$our_digest" ]; then
                     keep_reason="base-digest-label-missing"
                   elif [ "$our_digest" != "$upstream_digest" ]; then
                     keep_reason="base-digest-drift ($our_digest -> $upstream_digest)"
                   fi
+                elif grep -qiE 'MANIFEST_UNKNOWN|NAME_UNKNOWN|not found|404' config_err; then
+                  keep_reason="ghcr-tag-missing"
+                else
+                  echo "::warning::[$major] crane config $ghcr_ref failed (not a 404) — building (fail-open). crane: $(tr '\n' ' ' <config_err)"
+                  keep_reason="ghcr-config-error"
                 fi
               fi
 
