@@ -304,7 +304,13 @@ jobs:
                   '. + [{ major: $major, version: $version, no_cache: $nc }]' \
                   <<<"$filtered")
               else
-                echo "[$major] skip — up to date"
+                # Surface the healthy no-op as a run annotation (::notice::,
+                # blue) — mirrors the visibility of the "not published yet"
+                # ::warning:: so a clean cron run leaves a breadcrumb on the
+                # summary instead of only a buried echo. Plain `echo` lines
+                # never become annotations; only ::notice::/::warning::/::error::
+                # do.
+                echo "::notice::[$major] up to date — base digest matches upstream and image is fresh; skipping rebuild (v$version)"
               fi
             done < <(jq -c '.[]' full-builds.json)
             builds="$filtered"
@@ -418,6 +424,24 @@ jobs:
 
       - name: Install bats-core
         uses: bats-core/bats-action@4.0.0
+        # Our suite loads only our own tests/helpers/*.bash via bats-core's
+        # native `load` — it uses NONE of the upstream helper libraries
+        # (bats-support/assert/detik/file). Each helper bats-action installs
+        # fires an internal actions/cache restore that fails with
+        # `tar … exit code 2` (it can't extract into the root-owned
+        # /usr/lib/bats-* paths), emitting one spurious "Failed to restore"
+        # warning per helper × 4 helpers × 15 amd64 cells = 60 per run — noise
+        # that buries real warnings. Disabling the four unused installs stops
+        # those caches ever being touched (not masking — the failing op no
+        # longer runs) and trims install time. bats-action 4.0.0 exposes no
+        # cache toggle; *-install:false is the only lever, and 4.0.0 is the
+        # newest tag (nothing to upgrade to). The bats binary itself still
+        # installs and its cache restores cleanly.
+        with:
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
 
       - name: Run bats suite (runtime assertions)
         env:
