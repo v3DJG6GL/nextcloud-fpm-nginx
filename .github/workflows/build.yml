@@ -18,7 +18,6 @@ on:
       - tests/**
       - compose.yaml
       - .github/workflows/build.yml
-      - .github/versions-blocklist.txt
   # No paths filter on pull_request — every PR must run the full matrix so
   # the required `all-ci` check actually reports. Otherwise PRs that touch
   # files outside the push filter (compose.yaml, renovate.json, README, …)
@@ -27,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force rebuild every non-blocklisted major (bypass digest + staleness gates)'
+        description: 'Force rebuild every in-window major (bypass digest + staleness gates)'
         type: boolean
         default: false
   schedule:
@@ -101,6 +100,9 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           IMAGE: nextcloud-fpm-nginx
           STALENESS_DAYS: '14'
+          # Build only the newest N currently-supported majors (rolling window).
+          # 0 = build every supported major. Applied in the matrix-compute step.
+          KEEP_LATEST_MAJORS: '2'
         run: |
           set -euo pipefail
 
@@ -113,24 +115,33 @@ jobs:
           # lower-cases the image ref itself.)
           owner_lc=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
 
-          blocklist_file=.github/versions-blocklist.txt
-          if [ -f "$blocklist_file" ]; then
-            # grep -v returns 1 when nothing matches (all-comment file); tolerate it.
-            blocklist=$(grep -vE '^\s*(#|$)' "$blocklist_file" || true)
-            blocklist=$(printf '%s' "$blocklist" | tr '\n' ',' | sed 's/,$//')
-          else
-            blocklist=""
-          fi
-          echo "Blocklist: ${blocklist:-<none>}"
+          # Build only the newest KEEP_LATEST_MAJORS supported majors. Upstream's
+          # versions.json lists every currently-supported major; we sort ascending
+          # and keep the last N. KEEP_LATEST_MAJORS=0 builds every supported major
+          # (no cap). When upstream cuts a new major the window rolls forward on its
+          # own — the oldest in-window major drops out with no file edit, and the
+          # new one is picked up automatically once its base image is published.
+          # Existing pinned tags on ghcr.io stay available; they just stop getting
+          # new builds.
+          keep="${KEEP_LATEST_MAJORS:-0}"
+          case "$keep" in
+            ''|*[!0-9]*)
+              echo "::error::KEEP_LATEST_MAJORS must be a non-negative integer (got '$keep')"
+              exit 1
+              ;;
+          esac
+          # Strip leading zeros so jq --argjson gets valid JSON ("08" is not).
+          keep=$((10#$keep))
+          echo "Keep latest majors: $( [ "$keep" -eq 0 ] && echo '<all>' || echo "$keep" )"
 
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors https://raw.githubusercontent.com/nextcloud/docker/master/versions.json \
             > versions.json
 
-          jq -c --arg block "$blocklist" '
-            ($block | split(",") | map(select(. != ""))) as $b
-            | [ to_entries[]
-                | select(.key as $k | $b | index($k) | not)
-                | { major: .key, version: .value.version, no_cache: false } ]
+          jq -c --argjson keep "$keep" '
+            [ to_entries[]
+              | { major: .key, version: .value.version, no_cache: false } ]
+            | sort_by(.major | tonumber)
+            | if $keep > 0 then .[ ([length - $keep, 0] | max) : ] else . end
           ' versions.json > full-builds.json
 
           echo "Candidate builds (pre-gate):"
@@ -217,7 +228,7 @@ jobs:
           fi
 
           latest=$(jq -r 'map(.major | tonumber) | max' full-builds.json)
-          echo "Latest non-blocked major: $latest"
+          echo "Latest in-window major: $latest"
 
           # ── Gate selection ───────────────────────────────────────────────
           # push / pull_request  → full matrix (paths filter already gated)
@@ -354,7 +365,7 @@ jobs:
           - { id: mysql-redis-nopush-cron-none,        db: mysql,    redis: 'true',  notify_push: 'false', cron: none        }
           - { id: mysql-redis-nopush-cron-incontainer, db: mysql,    redis: 'true',  notify_push: 'false', cron: incontainer }
           - { id: mysql-redis-nopush-cron-sidecar,     db: mysql,    redis: 'true',  notify_push: 'false', cron: sidecar     }
-        # 2 majors × 15 scenarios = 30 matrix cells
+        # KEEP_LATEST_MAJORS majors × 15 scenarios (default 2 → 30 matrix cells)
     steps:
       # Reclaim ~25 GiB of preinstalled toolchains we don't use (Android SDK,
       # .NET, Haskell, large apt packages, pre-pulled Docker images). GH-hosted
@@ -579,8 +590,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # cache-image: false — the two build cells (v32 + v33) run in parallel
-      # and both try to save the binfmt image under the SAME fixed GHA cache
+      # cache-image: false — the parallel build cells (one per in-window major)
+      # both try to save the binfmt image under the SAME fixed GHA cache
       # key, so one loses the reservation race and logs a benign
       # "Failed to save: Unable to reserve cache" warning every publish run.
       # The action docker-pulls binfmt:latest regardless of caching (a cache

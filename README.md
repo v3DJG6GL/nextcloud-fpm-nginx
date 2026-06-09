@@ -23,7 +23,7 @@ Replace `<OWNER>` with the GitHub user/org that owns this build (default:
 | `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v33.0` | Latest 33.0.x (currently 33.0.3) | You want automatic patch upgrades within a minor line. |
 | `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v33` | Latest 33.x.x | You want all Nextcloud 33 patches. |
 | `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v32` | Latest 32.x.x | You're still on Nextcloud 32. |
-| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:latest` | Newest non-blocked major | Convenience only; auto-promotes on major bumps (be careful). |
+| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:latest` | Newest built major | Convenience only; auto-promotes on major bumps (be careful). |
 
 Nextcloud uses `<major>.0.<patch>` exclusively today (e.g., `33.0.3`,
 `32.0.9` — no `33.1.x` series), so `v33` and `v33.0` currently point at the
@@ -349,11 +349,15 @@ pull && docker compose up -d`. The Nextcloud entrypoint refuses to skip
 majors (e.g., 32 → 34 directly), so go through every major in order. Back
 up first.
 
-**Removing a major from CI**
+**Controlling which majors CI builds**
 
-Add the major number to `.github/versions-blocklist.txt` and commit. The
-next build run will skip it. Existing pinned tags on ghcr.io (`v33.0.3`,
-etc.) remain available — they just stop receiving new builds.
+CI builds the newest `KEEP_LATEST_MAJORS` currently-supported majors (set in
+`.github/workflows/build.yml`, default `2` — i.e. the current major plus the
+previous one). When upstream cuts a new major the window rolls forward
+automatically and the oldest in-window major drops out — no edit needed. To
+build more or fewer, change `KEEP_LATEST_MAJORS` (set it to `0` to build every
+supported major). Existing pinned tags on ghcr.io (`v33.0.3`, etc.) remain
+available — they just stop receiving new builds.
 
 ## Updating the nginx config on Nextcloud major bumps
 
