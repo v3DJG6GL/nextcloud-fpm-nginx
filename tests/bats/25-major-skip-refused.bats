@@ -13,11 +13,12 @@ FIXDIR="$(pwd)/tests/fixtures"
 setup() {
     # This test makes sense only against majors >= 33 (we synth a 31 marker;
     # 31→32 is a normal one-major upgrade, not a skip, and the entrypoint
-    # rightly runs `occ upgrade` rather than refusing).
-    case "${NC_MAJOR:-33}" in
-        33|34|35|36) ;;
-        *) skip "scenario NC_MAJOR=$NC_MAJOR doesn't make sense for the 31→ skip test" ;;
-    esac
+    # rightly runs `occ upgrade` rather than refusing). The floor is the v31
+    # fixture + 2 — a fixed lower bound, so no per-major edits as new majors
+    # ship (the old 33|34|35|36 allowlist silently skipped at v37+).
+    if [ "${NC_MAJOR:-33}" -lt 33 ]; then
+        skip "NC_MAJOR=$NC_MAJOR < 33 — within one major of the v31 marker, a normal upgrade not a skip"
+    fi
 }
 
 teardown() {
