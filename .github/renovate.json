@@ -48,6 +48,13 @@
       "matchUpdateTypes": ["major"],
       "automerge": false,
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Keep GitHub Actions on floating major tags (@vN), including the wretry-wrapped `action:` inputs the custom regex manager tracks. Suppress pin/patch/minor so they are never pinned to an exact patch (GitHub moves the @vN tag, so patch fixes land at runtime without a PR); a new MAJOR still surfaces via the rule above. This matches how the unwrapped `uses:` actions already behave and stops the one-PR-per-action churn the regex manager would otherwise create.",
+      "matchFileNames": [".github/workflows/**"],
+      "matchDatasources": ["github-tags"],
+      "matchUpdateTypes": ["pin", "patch", "minor"],
+      "enabled": false
     }
   ]
 }

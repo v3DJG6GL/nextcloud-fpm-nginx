@@ -519,7 +519,7 @@ jobs:
         if: always()
         uses: Wandalen/wretry.action@v3.8.0
         with:
-          action: actions/upload-artifact@v7.0.1
+          action: actions/upload-artifact@v7
           attempt_limit: 3
           attempt_delay: 10000
           with: |
@@ -739,7 +739,7 @@ jobs:
       - name: Log in to ghcr.io (retry on transient failure)
         uses: Wandalen/wretry.action@v3.8.0
         with:
-          action: docker/login-action@v4.2.0
+          action: docker/login-action@v4
           attempt_limit: 3
           attempt_delay: 10000
           with: |
