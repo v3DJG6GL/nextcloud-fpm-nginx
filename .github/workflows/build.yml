@@ -397,6 +397,24 @@ jobs:
           swap-storage: 'false'
           tool-cache: 'false'
 
+      - name: Point Docker Hub pulls at mirror.gcr.io (fallback)
+        # Docker Hub (registry-1.docker.io) intermittently times out / rate-limits.
+        # Route docker.io through Google's pull-through mirror (which falls back to
+        # Docker Hub if the mirror misses/errors):
+        #  - host daemon (registry-mirrors): the buildkit boot image, the
+        #    postgres/redis/mariadb test services, and qemu's binfmt image.
+        #  - buildkit (buildkitd-mirror.toml, read by Set up Buildx): the
+        #    nextcloud:<ver>-fpm base pulls, which run inside the buildkit
+        #    container and bypass the daemon mirror.
+        run: |
+          set -eux
+          sudo mkdir -p /etc/docker
+          existing=$(cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+          echo "$existing" | jq '. + {"registry-mirrors":["https://mirror.gcr.io"]}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+          printf '[registry."docker.io"]\n  mirrors = ["mirror.gcr.io"]\n' > /tmp/buildkitd-mirror.toml
+
       - name: Checkout (retry on transient failure)
         uses: Wandalen/wretry.action@v3.8.0
         with:
@@ -410,13 +428,14 @@ jobs:
           action: docker/setup-buildx-action@v4
           attempt_limit: 3
           attempt_delay: 10000
-          # Boot buildkit from Google's Docker Hub pull-through mirror instead of
-          # registry-1.docker.io, which intermittently times out pulling the
-          # builder image and can outlast the retry window above (run 27341994883:
-          # one cell's 3 attempts all fell inside a Docker Hub blip). mirror.gcr.io
-          # is far more available + unauthenticated/no rate limit.
+          # docker.io base-image pulls (nextcloud:<ver>-fpm) happen inside the
+          # buildkit container, which bypasses the host daemon registry-mirror —
+          # so point buildkit at the same mirror.gcr.io (file written by the
+          # "Point Docker Hub pulls at mirror" step above; buildkit falls back to
+          # Docker Hub if the mirror misses). The buildkit BOOT image and the
+          # compose test services go through the host daemon mirror instead.
           with: |
-            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+            buildkitd-config: /tmp/buildkitd-mirror.toml
 
       - name: Build amd64 image (load locally — Pattern A)
         uses: docker/build-push-action@v7
@@ -536,19 +555,33 @@ jobs:
           attempt_limit: 3
           attempt_delay: 10000
 
+      - name: Point Docker Hub pulls at mirror.gcr.io (fallback)
+        # See the test job for rationale: host daemon mirror covers the buildkit
+        # boot image; buildkitd-mirror.toml covers buildkit base-image pulls. Both
+        # fall back to Docker Hub.
+        run: |
+          set -eux
+          sudo mkdir -p /etc/docker
+          existing=$(cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+          echo "$existing" | jq '. + {"registry-mirrors":["https://mirror.gcr.io"]}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+          printf '[registry."docker.io"]\n  mirrors = ["mirror.gcr.io"]\n' > /tmp/buildkitd-mirror.toml
+
       - name: Set up Buildx (retry on transient failure)
         uses: Wandalen/wretry.action@v3.8.0
         with:
           action: docker/setup-buildx-action@v4
           attempt_limit: 3
           attempt_delay: 10000
-          # Boot buildkit from Google's Docker Hub pull-through mirror instead of
-          # registry-1.docker.io, which intermittently times out pulling the
-          # builder image and can outlast the retry window above (run 27341994883:
-          # one cell's 3 attempts all fell inside a Docker Hub blip). mirror.gcr.io
-          # is far more available + unauthenticated/no rate limit.
+          # docker.io base-image pulls (nextcloud:<ver>-fpm) happen inside the
+          # buildkit container, which bypasses the host daemon registry-mirror —
+          # so point buildkit at the same mirror.gcr.io (file written by the
+          # "Point Docker Hub pulls at mirror" step above; buildkit falls back to
+          # Docker Hub if the mirror misses). The buildkit BOOT image and the
+          # compose test services go through the host daemon mirror instead.
           with: |
-            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+            buildkitd-config: /tmp/buildkitd-mirror.toml
 
       - name: Build arm64 image (load locally)
         uses: docker/build-push-action@v7
@@ -649,6 +682,19 @@ jobs:
           attempt_limit: 3
           attempt_delay: 10000
 
+      - name: Point Docker Hub pulls at mirror.gcr.io (fallback)
+        # See the test job for rationale: host daemon mirror covers the buildkit
+        # boot image + qemu's binfmt image; buildkitd-mirror.toml covers buildkit
+        # base-image pulls. Both fall back to Docker Hub.
+        run: |
+          set -eux
+          sudo mkdir -p /etc/docker
+          existing=$(cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+          echo "$existing" | jq '. + {"registry-mirrors":["https://mirror.gcr.io"]}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo systemctl restart docker
+          printf '[registry."docker.io"]\n  mirrors = ["mirror.gcr.io"]\n' > /tmp/buildkitd-mirror.toml
+
       # cache-image: false — the parallel build cells (one per in-window major)
       # both try to save the binfmt image under the SAME fixed GHA cache
       # key, so one loses the reservation race and logs a benign
@@ -672,13 +718,14 @@ jobs:
           action: docker/setup-buildx-action@v4
           attempt_limit: 3
           attempt_delay: 10000
-          # Boot buildkit from Google's Docker Hub pull-through mirror instead of
-          # registry-1.docker.io, which intermittently times out pulling the
-          # builder image and can outlast the retry window above (run 27341994883:
-          # one cell's 3 attempts all fell inside a Docker Hub blip). mirror.gcr.io
-          # is far more available + unauthenticated/no rate limit.
+          # docker.io base-image pulls (nextcloud:<ver>-fpm) happen inside the
+          # buildkit container, which bypasses the host daemon registry-mirror —
+          # so point buildkit at the same mirror.gcr.io (file written by the
+          # "Point Docker Hub pulls at mirror" step above; buildkit falls back to
+          # Docker Hub if the mirror misses). The buildkit BOOT image and the
+          # compose test services go through the host daemon mirror instead.
           with: |
-            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+            buildkitd-config: /tmp/buildkitd-mirror.toml
 
       - name: Log in to ghcr.io (retry on transient failure)
         uses: Wandalen/wretry.action@v3.8.0
