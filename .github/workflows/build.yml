@@ -516,7 +516,7 @@ jobs:
         if: always()
         uses: Wandalen/wretry.action@v3.8.0
         with:
-          action: actions/upload-artifact@v7
+          action: actions/upload-artifact@v7.0.1
           attempt_limit: 3
           attempt_delay: 10000
           with: |
