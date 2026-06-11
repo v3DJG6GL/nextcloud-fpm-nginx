@@ -21,8 +21,12 @@
       "groupName": "github-actions"
     },
     {
-      "description": "Group all Debian apt-package bumps into one PR. The custom Dockerfile manager picks these up from `# renovate: datasource=repology depName=debian_13/<pkg>` markers.",
-      "matchDatasources": ["repology"],
+      "description": "nginx + supervisor are pinned in the Dockerfile and tracked via the `deb` datasource (markers there). Repology strips the Debian -N+debNNuM revision so it can't see security rebuilds; the deb datasource reads the actual package index. Point it at both trixie (base) and trixie-security so security revisions are picked up — Renovate merges the registries and takes the highest. All apt bumps grouped into one PR.",
+      "matchDatasources": ["deb"],
+      "registryUrls": [
+        "https://deb.debian.org/debian?suite=trixie&components=main&binaryArch=amd64",
+        "https://deb.debian.org/debian-security?suite=trixie-security&components=main&binaryArch=amd64"
+      ],
       "groupName": "debian-apt"
     },
     {

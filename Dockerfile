@@ -3,14 +3,23 @@ FROM nextcloud:${NC_VERSION}-fpm
 
 USER root
 
-# nginx & supervisor are pinned to exact Debian (Trixie) versions so Renovate
-# can open a PR the moment Debian publishes a security update — see
-# .github/renovate.json (Repology datasource, debian_13/<pkg>). The PR merging
-# is what triggers a rebuild for these packages; transitive deps (libssl etc.)
-# are refreshed by the staleness branch of the daily compute-matrix gate.
-# renovate: datasource=repology depName=debian_13/nginx versioning=loose
+# nginx & supervisor are pinned to exact Debian (Trixie) versions. Renovate
+# tracks them via the `deb` datasource — the real Debian package index, incl.
+# trixie-security (registryUrls live in .github/renovate.json) — so it opens a
+# PR the moment Debian publishes a new security revision (…+deb13uN). Repology
+# is NOT usable here: it strips the Debian -N+debNNuM suffix and reports only the
+# bare upstream version (e.g. 1.26.3), so it never sees security rebuilds.
+#
+# Debian's apt mirror keeps only the newest revision, so when a security update
+# lands the pinned-exact version is deleted and a strict `pkg=$VER` install would
+# fail until the Renovate PR merges. The RUN below is tolerant: it installs the
+# exact pin when the index still has it, else falls back to the latest available
+# revision (with a loud warning) so CI never hard-reds in that window. Transitive
+# deps (libssl etc.) are refreshed by the staleness branch of the daily
+# compute-matrix gate.
+# renovate: datasource=deb depName=nginx versioning=deb
 ARG NGINX_VERSION=1.26.3-3+deb13u5
-# renovate: datasource=repology depName=debian_13/supervisor versioning=loose
+# renovate: datasource=deb depName=supervisor versioning=deb
 ARG SUPERVISOR_VERSION=4.2.5-3
 
 # ffmpeg (installed below, intentionally unpinned) is the binary
@@ -18,13 +27,26 @@ ARG SUPERVISOR_VERSION=4.2.5-3
 # nextcloud:*-fpm image ships none. Kept outside the Renovate pinning set
 # above to avoid constant churn from its large codec dependency chain.
 
+# Exact pins with a mirror-rotation fallback (rationale in the note above).
+# apt_install_pinned <pkg> <want>: install pkg=want if the apt index still has
+# that exact revision, else install the latest available revision and warn.
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends \
-        nginx=${NGINX_VERSION} \
-        supervisor=${SUPERVISOR_VERSION} \
-        ffmpeg \
-    ; \
+    apt_install_pinned() { \
+        pkg="$1"; want="$2"; \
+        if apt-cache madison "$pkg" 2>/dev/null \
+             | awk -F'|' '{ gsub(/ /, "", $2); print $2 }' \
+             | grep -qxF "$want"; then \
+            echo "[apt-pin] $pkg: installing exact pin $want"; \
+            apt-get install -y --no-install-recommends "$pkg=$want"; \
+        else \
+            echo "[apt-pin] WARNING: $pkg=$want not in the apt index (Debian rotated the revision) — installing latest available until Renovate bumps the pin" >&2; \
+            apt-get install -y --no-install-recommends "$pkg"; \
+        fi; \
+    }; \
+    apt_install_pinned nginx "${NGINX_VERSION}"; \
+    apt_install_pinned supervisor "${SUPERVISOR_VERSION}"; \
+    apt-get install -y --no-install-recommends ffmpeg; \
     rm -rf /var/lib/apt/lists/*; \
     ln -sf /dev/stdout /var/log/nginx/access.log; \
     ln -sf /dev/stderr /var/log/nginx/error.log; \
