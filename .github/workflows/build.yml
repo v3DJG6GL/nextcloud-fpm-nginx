@@ -428,13 +428,16 @@ jobs:
           action: docker/setup-buildx-action@v4
           attempt_limit: 3
           attempt_delay: 10000
-          # docker.io base-image pulls (nextcloud:<ver>-fpm) happen inside the
-          # buildkit container, which bypasses the host daemon registry-mirror —
-          # so point buildkit at the same mirror.gcr.io (file written by the
-          # "Point Docker Hub pulls at mirror" step above; buildkit falls back to
-          # Docker Hub if the mirror misses). The buildkit BOOT image and the
-          # compose test services go through the host daemon mirror instead.
+          # Boot the builder from a gcr.io image ref, NOT docker.io + the host
+          # daemon mirror: a daemon registry-mirror serves image *content* from
+          # the mirror but still probes registry-1.docker.io/v2/ for the auth
+          # handshake, and that probe times out during Docker Hub blips (PR #11 /
+          # run 27344118014 — one cell red on "Get registry-1.docker.io/v2/:
+          # context deadline exceeded" despite the mirror). A gcr.io image ref
+          # avoids docker.io entirely for boot. buildkitd-config additionally
+          # routes build-time base pulls (nextcloud:<ver>-fpm) through the mirror.
           with: |
+            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
             buildkitd-config: /tmp/buildkitd-mirror.toml
 
       - name: Build amd64 image (load locally — Pattern A)
@@ -574,13 +577,16 @@ jobs:
           action: docker/setup-buildx-action@v4
           attempt_limit: 3
           attempt_delay: 10000
-          # docker.io base-image pulls (nextcloud:<ver>-fpm) happen inside the
-          # buildkit container, which bypasses the host daemon registry-mirror —
-          # so point buildkit at the same mirror.gcr.io (file written by the
-          # "Point Docker Hub pulls at mirror" step above; buildkit falls back to
-          # Docker Hub if the mirror misses). The buildkit BOOT image and the
-          # compose test services go through the host daemon mirror instead.
+          # Boot the builder from a gcr.io image ref, NOT docker.io + the host
+          # daemon mirror: a daemon registry-mirror serves image *content* from
+          # the mirror but still probes registry-1.docker.io/v2/ for the auth
+          # handshake, and that probe times out during Docker Hub blips (PR #11 /
+          # run 27344118014 — one cell red on "Get registry-1.docker.io/v2/:
+          # context deadline exceeded" despite the mirror). A gcr.io image ref
+          # avoids docker.io entirely for boot. buildkitd-config additionally
+          # routes build-time base pulls (nextcloud:<ver>-fpm) through the mirror.
           with: |
+            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
             buildkitd-config: /tmp/buildkitd-mirror.toml
 
       - name: Build arm64 image (load locally)
@@ -718,13 +724,16 @@ jobs:
           action: docker/setup-buildx-action@v4
           attempt_limit: 3
           attempt_delay: 10000
-          # docker.io base-image pulls (nextcloud:<ver>-fpm) happen inside the
-          # buildkit container, which bypasses the host daemon registry-mirror —
-          # so point buildkit at the same mirror.gcr.io (file written by the
-          # "Point Docker Hub pulls at mirror" step above; buildkit falls back to
-          # Docker Hub if the mirror misses). The buildkit BOOT image and the
-          # compose test services go through the host daemon mirror instead.
+          # Boot the builder from a gcr.io image ref, NOT docker.io + the host
+          # daemon mirror: a daemon registry-mirror serves image *content* from
+          # the mirror but still probes registry-1.docker.io/v2/ for the auth
+          # handshake, and that probe times out during Docker Hub blips (PR #11 /
+          # run 27344118014 — one cell red on "Get registry-1.docker.io/v2/:
+          # context deadline exceeded" despite the mirror). A gcr.io image ref
+          # avoids docker.io entirely for boot. buildkitd-config additionally
+          # routes build-time base pulls (nextcloud:<ver>-fpm) through the mirror.
           with: |
+            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
             buildkitd-config: /tmp/buildkitd-mirror.toml
 
       - name: Log in to ghcr.io (retry on transient failure)
