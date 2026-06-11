@@ -448,30 +448,33 @@ jobs:
             --config tests/cst/php.yaml \
             --config tests/cst/notify_push.yaml
 
-      - name: Install bats-core (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
+      # NOT wretry-wrapped: bats-action has a `pre` cache-restore hook, and
+      # wretry runs the wrapped action's pre/post. Unwrapped, that restore's
+      # `tar exit 2` is a non-fatal warning; under wretry the pre failure is
+      # FATAL and skips every downstream step (observed: run 27341721315, all
+      # amd64 cells red on "Pre Install bats-core"). Its download-flake risk is
+      # low, so retry isn't worth breaking it. The `*-install:false` inputs below
+      # also stop those failing helper-cache restores from running at all.
+      - name: Install bats-core
+        uses: bats-core/bats-action@4.0.0
+        # Our suite loads only our own tests/helpers/*.bash via bats-core's
+        # native `load` — it uses NONE of the upstream helper libraries
+        # (bats-support/assert/detik/file). Each helper bats-action installs
+        # fires an internal actions/cache restore that fails with
+        # `tar … exit code 2` (it can't extract into the root-owned
+        # /usr/lib/bats-* paths), emitting one spurious "Failed to restore"
+        # warning per helper × 4 helpers × 15 amd64 cells = 60 per run — noise
+        # that buries real warnings. Disabling the four unused installs stops
+        # those caches ever being touched (not masking — the failing op no
+        # longer runs) and trims install time. bats-action 4.0.0 exposes no
+        # cache toggle; *-install:false is the only lever, and 4.0.0 is the
+        # newest tag (nothing to upgrade to). The bats binary itself still
+        # installs and its cache restores cleanly.
         with:
-          action: bats-core/bats-action@4.0.0
-          attempt_limit: 3
-          attempt_delay: 10000
-          # Our suite loads only our own tests/helpers/*.bash via bats-core's
-          # native `load` — it uses NONE of the upstream helper libraries
-          # (bats-support/assert/detik/file). Each helper bats-action installs
-          # fires an internal actions/cache restore that fails with
-          # `tar … exit code 2` (it can't extract into the root-owned
-          # /usr/lib/bats-* paths), emitting one spurious "Failed to restore"
-          # warning per helper × 4 helpers × 15 amd64 cells = 60 per run — noise
-          # that buries real warnings. Disabling the four unused installs stops
-          # those caches ever being touched (not masking — the failing op no
-          # longer runs) and trims install time. bats-action 4.0.0 exposes no
-          # cache toggle; *-install:false is the only lever, and 4.0.0 is the
-          # newest tag (nothing to upgrade to). The bats binary itself still
-          # installs and its cache restores cleanly.
-          with: |
-            support-install: false
-            assert-install: false
-            detik-install: false
-            file-install: false
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
 
       - name: Run bats suite (runtime assertions)
         env:
