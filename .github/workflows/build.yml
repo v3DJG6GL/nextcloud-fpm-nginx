@@ -71,7 +71,12 @@ jobs:
       builds: ${{ steps.set.outputs.builds }}
       latest: ${{ steps.set.outputs.latest }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: actions/checkout@v6
+          attempt_limit: 3
+          attempt_delay: 10000
 
       - name: Install crane
         env:
@@ -392,9 +397,19 @@ jobs:
           swap-storage: 'false'
           tool-cache: 'false'
 
-      - uses: actions/checkout@v6
+      - name: Checkout (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: actions/checkout@v6
+          attempt_limit: 3
+          attempt_delay: 10000
 
-      - uses: docker/setup-buildx-action@v4
+      - name: Set up Buildx (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v4
+          attempt_limit: 3
+          attempt_delay: 10000
 
       - name: Build amd64 image (load locally — Pattern A)
         uses: docker/build-push-action@v7
@@ -433,26 +448,30 @@ jobs:
             --config tests/cst/php.yaml \
             --config tests/cst/notify_push.yaml
 
-      - name: Install bats-core
-        uses: bats-core/bats-action@4.0.0
-        # Our suite loads only our own tests/helpers/*.bash via bats-core's
-        # native `load` — it uses NONE of the upstream helper libraries
-        # (bats-support/assert/detik/file). Each helper bats-action installs
-        # fires an internal actions/cache restore that fails with
-        # `tar … exit code 2` (it can't extract into the root-owned
-        # /usr/lib/bats-* paths), emitting one spurious "Failed to restore"
-        # warning per helper × 4 helpers × 15 amd64 cells = 60 per run — noise
-        # that buries real warnings. Disabling the four unused installs stops
-        # those caches ever being touched (not masking — the failing op no
-        # longer runs) and trims install time. bats-action 4.0.0 exposes no
-        # cache toggle; *-install:false is the only lever, and 4.0.0 is the
-        # newest tag (nothing to upgrade to). The bats binary itself still
-        # installs and its cache restores cleanly.
+      - name: Install bats-core (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          support-install: false
-          assert-install: false
-          detik-install: false
-          file-install: false
+          action: bats-core/bats-action@4.0.0
+          attempt_limit: 3
+          attempt_delay: 10000
+          # Our suite loads only our own tests/helpers/*.bash via bats-core's
+          # native `load` — it uses NONE of the upstream helper libraries
+          # (bats-support/assert/detik/file). Each helper bats-action installs
+          # fires an internal actions/cache restore that fails with
+          # `tar … exit code 2` (it can't extract into the root-owned
+          # /usr/lib/bats-* paths), emitting one spurious "Failed to restore"
+          # warning per helper × 4 helpers × 15 amd64 cells = 60 per run — noise
+          # that buries real warnings. Disabling the four unused installs stops
+          # those caches ever being touched (not masking — the failing op no
+          # longer runs) and trims install time. bats-action 4.0.0 exposes no
+          # cache toggle; *-install:false is the only lever, and 4.0.0 is the
+          # newest tag (nothing to upgrade to). The bats binary itself still
+          # installs and its cache restores cleanly.
+          with: |
+            support-install: false
+            assert-install: false
+            detik-install: false
+            file-install: false
 
       - name: Run bats suite (runtime assertions)
         env:
@@ -466,17 +485,25 @@ jobs:
 
       - name: Upload JUnit results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
-          path: tests/reports/*.xml
+          action: actions/upload-artifact@v7
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
+            path: tests/reports/*.xml
 
       - name: Surface bats failures in PR / run summary
         if: always()
-        uses: mikepenz/action-junit-report@v6
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          report_paths: tests/reports/*.xml
-          check_name: bats / ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
+          action: mikepenz/action-junit-report@v6
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            report_paths: tests/reports/*.xml
+            check_name: bats / ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
 
   # ─── arm64 smoke (native GH-hosted runner — no QEMU) ───
   # Builds for arm64, loads locally, runs only the CST suite + a manual
@@ -492,9 +519,19 @@ jobs:
       matrix:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: actions/checkout@v6
+          attempt_limit: 3
+          attempt_delay: 10000
 
-      - uses: docker/setup-buildx-action@v4
+      - name: Set up Buildx (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v4
+          attempt_limit: 3
+          attempt_delay: 10000
 
       - name: Build arm64 image (load locally)
         uses: docker/build-push-action@v7
@@ -588,7 +625,12 @@ jobs:
       matrix:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: actions/checkout@v6
+          attempt_limit: 3
+          attempt_delay: 10000
 
       # cache-image: false — the parallel build cells (one per in-window major)
       # both try to save the binfmt image under the SAME fixed GHA cache
@@ -599,16 +641,31 @@ jobs:
       # turns that manifest check into a small (~tens of MB) layer pull — a
       # second or two per cell, on publish builds only — and frees the binfmt
       # tarball from the repo's GHA cache budget. No functional change.
-      - uses: docker/setup-qemu-action@v4
+      - name: Set up QEMU (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          cache-image: false
-      - uses: docker/setup-buildx-action@v4
+          action: docker/setup-qemu-action@v4
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            cache-image: false
+      - name: Set up Buildx (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v4
+          attempt_limit: 3
+          attempt_delay: 10000
 
-      - uses: docker/login-action@v4
+      - name: Log in to ghcr.io (retry on transient failure)
+        uses: Wandalen/wretry.action@v3.8.0
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          action: docker/login-action@v4
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v6

@@ -14,6 +14,15 @@
   "automergeStrategy": "squash",
   "platformAutomerge": true,
   "ignoreDeps": ["nextcloud"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track GitHub Actions wrapped by Wandalen/wretry.action. Renovate's github-actions manager only reads `uses:`, not the nested `action:` input wretry takes, so without this the retry-wrapped actions (setup-buildx, checkout, login, …) would silently stop receiving updates.",
+      "fileMatch": ["^\\.github/workflows/.+\\.ya?ml$"],
+      "matchStrings": ["action:\\s+(?<depName>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)@(?<currentValue>[A-Za-z0-9._+-]+)"],
+      "datasourceTemplate": "github-tags"
+    }
+  ],
   "packageRules": [
     {
       "description": "Group all GitHub Actions bumps into one PR.",
