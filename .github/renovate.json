@@ -55,6 +55,11 @@
       "matchDatasources": ["github-tags"],
       "matchUpdateTypes": ["pin", "patch", "minor"],
       "enabled": false
+    },
+    {
+      "description": "Exempt wretry.action from the floating-major suppression above. Unlike the wrapped actions it is exact-pinned (it executes arbitrary nested actions, so we want reviewed updates, not a moving tag), so it must keep receiving patch/minor bump PRs — e.g. a future Node 24 release that clears the runner's node20-deprecation warning. Without this, the rule above would freeze it at v3.8.0 until a new MAJOR.",
+      "matchDepNames": ["Wandalen/wretry.action"],
+      "enabled": true
     }
   ]
 }
