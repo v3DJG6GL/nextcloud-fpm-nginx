@@ -84,18 +84,23 @@ teardown() {
         -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
         "$NC_IMAGE" >/dev/null
 
-    # The restart only skips the chown if the first-boot install has ALREADY
-    # written the www sentinel (version.php) at the target ownership before we
-    # stop. A bare `sleep 10` races the install on a loaded runner: stop too
-    # early and version.php is still missing/uid-33 at restart, so the sentinel
-    # fires a SECOND chown and the count assertion below sees 2. Wait (up to
-    # 60s) for the sentinel to settle — same pattern as the recreate test —
-    # so the restart is deterministic.
+    # The restart only skips the chowns if the first-boot install has ALREADY
+    # settled BOTH ownership sentinels before we stop:
+    #   - version.php  — ships with the code, chowned ~immediately, and
+    #   - data/.ncdata — written later by `occ maintenance:install`.
+    # version.php settling does NOT mean install is done — locally it goes
+    # 1500:1500 ~7s before .ncdata does. Waiting on version.php alone stops
+    # mid-install, so the restart sees an unsettled data dir and fires a
+    # data-dir chown (`chown -R 1500:1500 /var/www/html/data`) — which the
+    # count below would otherwise pick up. So wait (up to 60s) for BOTH, the
+    # same pattern the recreate test uses, to make the restart deterministic.
     local i
     for i in $(seq 1 60); do
         if docker exec "$PUID_TEST_NAME" sh -c '
             [ -f /var/www/html/version.php ] \
-            && [ "$(stat -c %u:%g /var/www/html/version.php)" = "1500:1500" ]
+            && [ -f /var/www/html/data/.ncdata ] \
+            && [ "$(stat -c %u:%g /var/www/html/version.php)" = "1500:1500" ] \
+            && [ "$(stat -c %u:%g /var/www/html/data/.ncdata)"  = "1500:1500" ]
         ' 2>/dev/null; then break; fi
         sleep 1
     done
@@ -111,12 +116,17 @@ teardown() {
     local count
     count=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'usermod www-data')
     assert_eq "$count" "1" "expected exactly 1 usermod log line across both starts"
-    # And the chown itself must be SKIPPED on the restart — that's the named
-    # behavior. version.php is already 1500:1500 from the first boot, so the
-    # sentinel skips the second chown: exactly 1 chown line across both starts.
+    # And the /var/www chown itself must be SKIPPED on the restart — that's the
+    # named behavior. version.php is already 1500:1500 from the first boot, so
+    # the sentinel skips the second chown: exactly 1 www-chown line across both
+    # starts. Anchor the match to the WEBROOT chown specifically: the log line
+    # is `chown -R 1500:1500 /var/www (` (plain) or `… /var/www [` (pruned), so
+    # require `/var/www` to be followed by a space + `(`/`[`. A bare
+    # `/var/www` substring would also match the data-dir chown
+    # (`… /var/www/html/data (`) and conflate the two counts.
     # (`grep -c` exits 1 when count is 0; `|| true` keeps bats' set -e happy.)
     local chown_count
-    chown_count=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -c 'chown -R 1500:1500 /var/www' || true)
+    chown_count=$(docker logs "$PUID_TEST_NAME" 2>&1 | grep -cE 'chown -R 1500:1500 /var/www [[(]' || true)
     assert_eq "$chown_count" "1" "chown should run once (first boot) and be skipped on restart via sentinel"
 }
 
