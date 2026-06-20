@@ -8,6 +8,28 @@ load '../helpers/compose.bash'   # compose_exec used by the no-usermod regressio
 
 PUID_TEST_NAME="nc-puid-test-$$"
 
+# Every test in this file boots — and several stop/start/recreate — a throwaway
+# container, so they're inherently timing-sensitive: a slow or loaded CI runner
+# can miss a wait window and flake transiently (the original symptom: a restart
+# racing the first-boot install, so the sentinel-gated chown fired twice). The
+# root cause of THAT case is fixed in-test (we now wait for the sentinel to
+# settle), but container timing flake has a long tail. bats-core reruns a
+# failing test up to BATS_TEST_RETRIES extra times — scope a small budget to
+# THIS file so a transient flake self-heals without a manual CI rerun, and
+# without granting retries to the deterministic static suites (where a retry
+# would only mask a real regression). Retries are safe here because teardown
+# drops the container and the volume-backed tests pre-clean their named volumes,
+# so each attempt starts from a clean first boot.
+#
+# We assign BATS_TEST_RETRIES *directly* (not `${BATS_TEST_RETRIES:=2}`): bats
+# unconditionally `export`s it to 0 before setup() runs, so a `:=` default is a
+# no-op and an external BATS_TEST_RETRIES env is clobbered too. The override
+# knob is therefore our own var, which bats leaves untouched: run with
+# PUID_TEST_RETRIES=0 to disable retries while debugging locally.
+setup() {
+    BATS_TEST_RETRIES="${PUID_TEST_RETRIES:-2}"
+}
+
 teardown() {
     container_rm "$PUID_TEST_NAME"
 }
@@ -61,7 +83,23 @@ teardown() {
         -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
         -e NEXTCLOUD_TRUSTED_DOMAINS=localhost \
         "$NC_IMAGE" >/dev/null
-    sleep 10
+
+    # The restart only skips the chown if the first-boot install has ALREADY
+    # written the www sentinel (version.php) at the target ownership before we
+    # stop. A bare `sleep 10` races the install on a loaded runner: stop too
+    # early and version.php is still missing/uid-33 at restart, so the sentinel
+    # fires a SECOND chown and the count assertion below sees 2. Wait (up to
+    # 60s) for the sentinel to settle — same pattern as the recreate test —
+    # so the restart is deterministic.
+    local i
+    for i in $(seq 1 60); do
+        if docker exec "$PUID_TEST_NAME" sh -c '
+            [ -f /var/www/html/version.php ] \
+            && [ "$(stat -c %u:%g /var/www/html/version.php)" = "1500:1500" ]
+        ' 2>/dev/null; then break; fi
+        sleep 1
+    done
+
     docker stop "$PUID_TEST_NAME" >/dev/null
     docker start "$PUID_TEST_NAME" >/dev/null
     sleep 4
@@ -92,6 +130,9 @@ teardown() {
 # (`version.php`) and only chown when it's actually wrong.
 @test "recreate with same PUID skips chown (sentinel survives /etc/passwd reset)" {
     local vol="puid-recreate-vol-$$"
+    # Pre-clean so a bats retry (or a leaked volume from a killed run) starts
+    # from a genuine fresh first boot, not a half-populated webroot.
+    docker volume rm "$vol" >/dev/null 2>&1 || true
 
     # First boot — fresh install, chown SHOULD run:
     docker run -d --name "$PUID_TEST_NAME" \
@@ -164,6 +205,8 @@ teardown() {
 # separate chown gated on .ncdata/.ocdata sentinel.
 @test "external NEXTCLOUD_DATA_DIR gets chowned via its own sentinel" {
     local datavol="puid-extdata-vol-$$"
+    # Pre-clean so a bats retry starts from a fresh data volume.
+    docker volume rm "$datavol" >/dev/null 2>&1 || true
 
     docker run -d --name "$PUID_TEST_NAME" \
         -e PUID=1700 -e PGID=1700 \
@@ -220,6 +263,8 @@ teardown() {
 @test "drift between separate webroot + data bind mounts triggers data-only chown" {
     local wwwvol="puid-drift-www-$$"
     local datavol="puid-drift-data-$$"
+    # Pre-clean so a bats retry starts from fresh webroot + data volumes.
+    docker volume rm "$wwwvol" "$datavol" >/dev/null 2>&1 || true
 
     docker run -d --name "$PUID_TEST_NAME" \
         -e PUID=1800 -e PGID=1800 \
@@ -286,6 +331,8 @@ teardown() {
 @test "first-boot after flatten prunes data dir when .ncdata sentinel matches" {
     local wwwvol="puid-prune-www-$$"
     local datavol="puid-prune-data-$$"
+    # Pre-clean so a bats retry starts from fresh webroot + data volumes.
+    docker volume rm "$wwwvol" "$datavol" >/dev/null 2>&1 || true
 
     # Bootstrap a NC instance to create both sentinels at PUID=1900:
     docker run -d --name "$PUID_TEST_NAME" \
