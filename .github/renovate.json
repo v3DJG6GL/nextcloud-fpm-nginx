@@ -13,12 +13,17 @@
   "automerge": true,
   "automergeStrategy": "squash",
   "platformAutomerge": true,
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": null
+  },
   "ignoreDeps": ["nextcloud"],
   "customManagers": [
     {
       "customType": "regex",
       "description": "Track GitHub Actions wrapped by Wandalen/wretry.action. Renovate's github-actions manager only reads `uses:`, not the nested `action:` input wretry takes, so without this the retry-wrapped actions (setup-buildx, checkout, login, …) would silently stop receiving updates.",
-      "fileMatch": ["^\\.github/workflows/.+\\.ya?ml$"],
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
       "matchStrings": ["action:\\s+(?<depName>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)@(?<currentValue>[A-Za-z0-9._+-]+)"],
       "datasourceTemplate": "github-tags"
     }
@@ -37,6 +42,11 @@
         "https://deb.debian.org/debian-security?suite=trixie-security&components=main&binaryArch=amd64"
       ],
       "groupName": "debian-apt"
+    },
+    {
+      "description": "Exempt the deb datasource from the global 3-day minimumReleaseAge. Two reasons: the debian-apt group's whole point is picking up trixie-security rebuilds, which must not wait out an age gate (and the vulnerabilityAlerts fast path can't help - that only covers GitHub's advisory DB, which has no deb coverage); and the deb datasource may not supply releaseTimestamps, which under internalChecksFilter=strict would silently freeze apt bumps forever rather than delay them.",
+      "matchDatasources": ["deb"],
+      "minimumReleaseAge": null
     },
     {
       "description": "Standalone bumps for tool versions tracked in build.yml (crane, etc.).",
