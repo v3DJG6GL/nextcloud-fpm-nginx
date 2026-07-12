@@ -20,9 +20,16 @@
 #   * Buildx cache: type=gha -> type=registry on the Forgejo registry
 #     (deterministic; the runner's GHA-compatible cache server may also
 #     work with type=gha, but registry cache has no compat question).
-#   * Actions are referenced fully-qualified (https://github.com/...) so
-#     resolution never depends on DEFAULT_ACTIONS_URL / what
-#     code.forgejo.org happens to mirror.
+#   * Actions are referenced unqualified (owner/repo@ref): the instance sets
+#     DEFAULT_ACTIONS_URL to itself, so refs resolve against local pull
+#     mirrors (orgs: actions, docker, bats-core, mikepenz, forgejo) — job
+#     startup has no GitHub dependency. Before bumping any @version here,
+#     confirm the mirror has synced that tag. Never reference
+#     actions/upload-artifact (mirror of GitHub's — refuses non-github.com
+#     instances); use forgejo/upload-artifact.
+#   * Binary tools (crane, container-structure-test) and upstream
+#     versions.json come from this instance too (tools generic packages /
+#     the nextcloud/docker pull mirror) instead of GitHub releases.
 #   * provenance/sbom disabled: buildx attestations create unknown/unknown
 #     manifest entries that Forgejo's registry has historically not
 #     accepted/displayed cleanly. Re-enable and test if desired.
@@ -87,16 +94,18 @@ jobs:
       latest: ${{ steps.set.outputs.latest }}
     steps:
       - name: Checkout
-        uses: https://github.com/actions/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Install crane
         env:
           # renovate: datasource=github-releases depName=google/go-containerregistry
+          # Fetched from this instance's `tools` generic package registry —
+          # upload the new release tarball there BEFORE bumping this version.
           CRANE_VERSION: v0.21.7
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
-            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            "${GITHUB_SERVER_URL}/api/packages/tools/generic/go-containerregistry/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin crane
           crane version
 
@@ -144,8 +153,11 @@ jobs:
           keep=$((10#$keep))
           echo "Keep latest majors: $( [ "$keep" -eq 0 ] && echo '<all>' || echo "$keep" )"
 
+          # Local pull mirror of github.com/nextcloud/docker (8h sync
+          # interval) — a new upstream release lands here at most one mirror
+          # interval late, i.e. within the same day's second scheduled run.
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
-            https://raw.githubusercontent.com/nextcloud/docker/master/versions.json \
+            "${GITHUB_SERVER_URL}/nextcloud/docker/raw/branch/master/versions.json" \
             > versions.json
 
           jq -c --argjson keep "$keep" '
@@ -367,7 +379,7 @@ jobs:
         # push/PR events if wall-clock time becomes a problem.
     steps:
       - name: Checkout
-        uses: https://github.com/actions/checkout@v6
+        uses: actions/checkout@v6
 
       # tests/bats/28-config-drift.bats runs `php -l` on the job host to
       # syntax-check a fixture. The catthehacker act image has no PHP.
@@ -377,7 +389,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends php-cli
 
       - name: Set up Buildx
-        uses: https://github.com/docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v4
         with:
           # Resolve docker.io refs via Google's pull-through mirror. All
           # matrix cells share the runner's single egress IP, and 30 cells
@@ -394,14 +406,14 @@ jobs:
       # Registry login needed here (not just in publish) because the buildx
       # cache now lives on the Forgejo registry (cache-to below).
       - name: Log in to the Forgejo registry
-        uses: https://github.com/docker/login-action@v4
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_TOKEN }}
 
       - name: Build amd64 image (load into dind — Pattern A)
-        uses: https://github.com/docker/build-push-action@v7
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
@@ -429,11 +441,13 @@ jobs:
       - name: container-structure-test (image-static assertions)
         env:
           IMG: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
+          # Fetched from this instance's `tools` generic package registry —
+          # upload the new release binary there BEFORE bumping this version.
           CST_VERSION: v1.22.1
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors -o /usr/local/bin/container-structure-test \
-            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-amd64"
+            "${GITHUB_SERVER_URL}/api/packages/tools/generic/container-structure-test/${CST_VERSION}/container-structure-test-linux-amd64"
           chmod +x /usr/local/bin/container-structure-test
           container-structure-test test --image "$IMG" \
             --config tests/cst/base.yaml \
@@ -442,7 +456,7 @@ jobs:
             --config tests/cst/notify_push.yaml
 
       - name: Install bats-core
-        uses: https://github.com/bats-core/bats-action@4.0.0
+        uses: bats-core/bats-action@4.0.0
         with:
           bats-version: "1.12.0"
           support-install: false
@@ -466,8 +480,10 @@ jobs:
       - name: Upload JUnit results
         if: always()
         # GitHub's upload-artifact v4+ refuses non-github.com instances
-        # ("not supported on GHES"); Forgejo maintains a compatible fork.
-        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        # ("not supported on GHES"). forgejo/upload-artifact is the local
+        # mirror of Forgejo's compatible fork — NOT actions/upload-artifact,
+        # which mirrors the GitHub original and would refuse to run here.
+        uses: forgejo/upload-artifact@v4
         with:
           name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
           path: tests/reports/*.xml
@@ -477,7 +493,7 @@ jobs:
         # Forgejo's checks API compatibility is partial — worst case this
         # step fails to post check-runs; don't let that fail the cell.
         continue-on-error: true
-        uses: https://github.com/mikepenz/action-junit-report@v6
+        uses: mikepenz/action-junit-report@v6
         with:
           report_paths: tests/reports/*.xml
           check_name: bats / ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
@@ -527,10 +543,10 @@ jobs:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
     steps:
       - name: Checkout
-        uses: https://github.com/actions/checkout@v6
+        uses: actions/checkout@v6
 
       - name: Set up Buildx
-        uses: https://github.com/docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v4
         with:
           # Same Docker Hub mirror as the test job — see comment there.
           buildkitd-config-inline: |
@@ -538,14 +554,14 @@ jobs:
               mirrors = ["mirror.gcr.io"]
 
       - name: Log in to the Forgejo registry
-        uses: https://github.com/docker/login-action@v4
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_TOKEN }}
 
       - id: meta
-        uses: https://github.com/docker/metadata-action@v6
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}
           tags: |
@@ -565,12 +581,14 @@ jobs:
         name: Resolve upstream base digest
         env:
           # renovate: datasource=github-releases depName=google/go-containerregistry
+          # Fetched from this instance's `tools` generic package registry —
+          # upload the new release tarball there BEFORE bumping this version.
           CRANE_VERSION: v0.21.7
           NC_VERSION: ${{ matrix.build.version }}
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
-            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            "${GITHUB_SERVER_URL}/api/packages/tools/generic/go-containerregistry/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin crane
           base_name="docker.io/library/nextcloud:${NC_VERSION}-fpm"
           # Retry with backoff: a lone HEAD, but Docker Hub 429s linger for
@@ -585,7 +603,7 @@ jobs:
           echo "base_name=$base_name" >> "$GITHUB_OUTPUT"
           echo "base_digest=$base_digest" >> "$GITHUB_OUTPUT"
 
-      - uses: https://github.com/docker/build-push-action@v7
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
