@@ -16,6 +16,7 @@ teardown() {
 }
 
 @test "bind-mounted php ini (zzz-user.ini) overrides PHP_* env-driven values" {
+    [ "${REMOTE_DOCKER:-}" = "1" ] && skip "bind-mount from job workspace not visible to remote docker daemon (dind)"
     # User override files must sort AFTER our zz-env-overrides.ini — '9' is 0x39
     # and 'z' is 0x7a, so a '99-' prefix would LOSE to 'zz-'; mount at zzz-user.ini.
     # PHP_TIMEZONE is set to a value DIFFERENT from the fixture so a passing
@@ -38,6 +39,7 @@ teardown() {
 }
 
 @test "www2.conf at zzz-local.conf overrides FPM pool settings" {
+    [ "${REMOTE_DOCKER:-}" = "1" ] && skip "bind-mount from job workspace not visible to remote docker daemon (dind)"
     docker run -d --name "$CTN" \
         -e SQLITE_DATABASE=nc.db \
         -e NEXTCLOUD_ADMIN_USER=a -e NEXTCLOUD_ADMIN_PASSWORD=b \
