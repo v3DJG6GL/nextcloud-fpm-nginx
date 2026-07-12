@@ -76,10 +76,10 @@ on:
   schedule:
     # Twice daily; both gates apply (digest drift + >=14d staleness).
     # A run where nothing drifted and nothing is stale is a ~30s no-op.
-    # (The GitHub off-peak-minute reasoning no longer applies on a
-    # self-hosted runner — times are arbitrary.)
-    - cron: '25 5 * * *'
-    - cron: '35 17 * * *'
+    # Forgejo evaluates these in UTC (verified empirically 2026-07-12):
+    # 06:00/14:00 UTC = 08:00/16:00 CEST (07:00/15:00 in winter CET).
+    - cron: '0 6 * * *'
+    - cron: '0 14 * * *'
 
 # Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
 # in-flight publishes). Note: older Forgejo versions ignore `concurrency`
