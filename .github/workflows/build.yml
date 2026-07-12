@@ -71,7 +71,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  REGISTRY: forgejo.informethic.ch
+  REGISTRY: forgejo.example.ch
   IMAGE: nextcloud-fpm-nginx
 
 jobs:
@@ -438,14 +438,16 @@ jobs:
           SCENARIO_REDIS: ${{ matrix.scenario.redis }}
           SCENARIO_NOTIFY_PUSH: ${{ matrix.scenario.notify_push }}
           SCENARIO_CRON: ${{ matrix.scenario.cron }}
+          # Signals the suite that the docker daemon is remote (dind): the five
+          # tests that bind-mount files from the job workspace skip themselves.
           REMOTE_DOCKER: "1"
         run: ./tests/run-all.sh
 
       - name: Upload JUnit results
         if: always()
-        # v4: the newest artifact API generation Forgejo's artifact server
-        # is known to support; bump once your instance handles newer.
-        uses: https://github.com/actions/upload-artifact@v4
+        # GitHub's upload-artifact v4+ refuses non-github.com instances
+        # ("not supported on GHES"); Forgejo maintains a compatible fork.
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
         with:
           name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
           path: tests/reports/*.xml
