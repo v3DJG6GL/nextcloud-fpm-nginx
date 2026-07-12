@@ -23,7 +23,11 @@
 #   * Actions are referenced unqualified (owner/repo@ref): the instance sets
 #     DEFAULT_ACTIONS_URL to itself, so refs resolve against local pull
 #     mirrors (orgs: actions, docker, bats-core, mikepenz, forgejo) — job
-#     startup has no GitHub dependency. Before bumping any @version here,
+#     startup has no GitHub dependency. REQUIRES app.ini
+#     [actions] DEFAULT_ACTIONS_URL = https://forgejo.informethic.ch (and a
+#     server restart): without it, unqualified refs silently fall back to
+#     code.forgejo.org, which lacks bats-core/bats-action — every test cell
+#     then dies at "Install bats-core". Before bumping any @version here,
 #     confirm the mirror has synced that tag. Never reference
 #     actions/upload-artifact (mirror of GitHub's — refuses non-github.com
 #     instances); use forgejo/upload-artifact.
