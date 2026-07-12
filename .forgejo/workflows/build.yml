@@ -490,7 +490,7 @@ jobs:
         # ("not supported on GHES"). forgejo/upload-artifact is the local
         # mirror of Forgejo's compatible fork — NOT actions/upload-artifact,
         # which mirrors the GitHub original and would refuse to run here.
-        uses: forgejo/upload-artifact@v4
+        uses: https://forgejo.informethic.ch/forgejo/upload-artifact@v4
         with:
           name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
           path: tests/reports/*.xml
