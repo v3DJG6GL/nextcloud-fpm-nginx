@@ -6,7 +6,7 @@ load '../helpers/lib.bash'
 load '../helpers/docker.bash'
 load '../helpers/compose.bash'   # compose_exec used by the no-usermod regression test
 
-PUID_TEST_NAME="nc-puid-test-$$"
+PUID_TEST_NAME="nc-puid-test-${COMPOSE_PROJECT_NAME:-$$}"
 
 # Every test in this file boots — and several stop/start/recreate — a throwaway
 # container, so they're inherently timing-sensitive: a slow or loaded CI runner

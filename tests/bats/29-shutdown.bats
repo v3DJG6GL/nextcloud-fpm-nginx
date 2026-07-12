@@ -5,7 +5,12 @@
 load '../helpers/lib.bash'
 load '../helpers/docker.bash'
 
-CTN="nc-shutdown-test-$$"
+# COMPOSE_PROJECT_NAME (unique per CI cell) — NOT bare $$: on a shared dind
+# daemon, concurrent matrix cells routinely land on identical in-container
+# PIDs, and two cells then fight over one container name ("Conflict. The
+# container name ... is already in use" / one cell SIGINTs the other's
+# container). Same pattern in every bats file that runs standalone containers.
+CTN="nc-shutdown-test-${COMPOSE_PROJECT_NAME:-$$}"
 
 teardown() {
     container_rm "$CTN"

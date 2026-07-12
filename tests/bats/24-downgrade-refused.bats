@@ -7,7 +7,7 @@
 load '../helpers/lib.bash'
 load '../helpers/docker.bash'
 
-CTN="nc-downgrade-test-$$"
+CTN="nc-downgrade-test-${COMPOSE_PROJECT_NAME:-$$}"
 
 setup() {
     if [ -z "${NC_IMAGE_PREV:-}" ]; then

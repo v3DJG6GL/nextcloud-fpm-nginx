@@ -6,7 +6,7 @@
 load '../helpers/lib.bash'
 load '../helpers/docker.bash'
 
-CTN="nc-secrets-test-$$"
+CTN="nc-secrets-test-${COMPOSE_PROJECT_NAME:-$$}"
 SECRET_DIR=""   # per-test scratch dir, set in setup()
 
 setup() {

@@ -8,7 +8,7 @@
 load '../helpers/lib.bash'
 load '../helpers/docker.bash'
 
-CTN="nc-bindmount-test-$$"
+CTN="nc-bindmount-test-${COMPOSE_PROJECT_NAME:-$$}"
 FIXDIR="$(pwd)/tests/fixtures"
 
 teardown() {

@@ -6,7 +6,7 @@
 load '../helpers/lib.bash'
 load '../helpers/docker.bash'
 
-CTN="nc-majorskip-test-$$"
+CTN="nc-majorskip-test-${COMPOSE_PROJECT_NAME:-$$}"
 VOL="nc-majorskip-vol-$$"
 FIXDIR="$(pwd)/tests/fixtures"
 
