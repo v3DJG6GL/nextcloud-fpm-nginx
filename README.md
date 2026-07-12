@@ -10,23 +10,24 @@ official [`nextcloud:<version>-fpm`](https://hub.docker.com/_/nextcloud) image.
 - supervisord runs both processes as PID 1.
 - One container behind your reverse proxy (Nginx Proxy Manager, Traefik,
   Caddy, etc.) — no separate webserver container needed.
-- Versioned, immutable image tags on ghcr.io for reproducible deployments.
+- Versioned, immutable image tags on the Forgejo container registry for
+  reproducible deployments.
 
 ## Image tags
 
-Replace `<OWNER>` with the GitHub user/org that owns this build (default:
-`v3djg6gl`).
+Replace `<REGISTRY>/<OWNER>` with the registry host and user/org that own
+this build (here: `forgejo.informethic.ch/martin-zeller`).
 
 | Tag | What it tracks | Use this when… |
 |---|---|---|
-| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v33.0.3` | Pinned to Nextcloud 33.0.3 | You want byte-stable deploys. |
-| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v33.0` | Latest 33.0.x (currently 33.0.3) | You want automatic patch upgrades within a minor line. |
-| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v33` | Latest 33.x.x | You want all Nextcloud 33 patches. |
-| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:v32` | Latest 32.x.x | You're still on Nextcloud 32. |
-| `ghcr.io/<OWNER>/nextcloud-fpm-nginx:latest` | Newest built major | Convenience only; auto-promotes on major bumps (be careful). |
+| `<REGISTRY>/<OWNER>/nextcloud-fpm-nginx:v34.0.1` | Pinned to Nextcloud 34.0.1 | You want byte-stable deploys. |
+| `<REGISTRY>/<OWNER>/nextcloud-fpm-nginx:v34.0` | Latest 34.0.x (currently 34.0.1) | You want automatic patch upgrades within a minor line. |
+| `<REGISTRY>/<OWNER>/nextcloud-fpm-nginx:v34` | Latest 34.x.x | You want all Nextcloud 34 patches. |
+| `<REGISTRY>/<OWNER>/nextcloud-fpm-nginx:v33` | Latest 33.x.x | You're still on Nextcloud 33. |
+| `<REGISTRY>/<OWNER>/nextcloud-fpm-nginx:latest` | Newest built major | Convenience only; auto-promotes on major bumps (be careful). |
 
-Nextcloud uses `<major>.0.<patch>` exclusively today (e.g., `33.0.3`,
-`32.0.9` — no `33.1.x` series), so `v33` and `v33.0` currently point at the
+Nextcloud uses `<major>.0.<patch>` exclusively today (e.g., `34.0.1`,
+`33.0.6` — no `34.1.x` series), so `v34` and `v34.0` currently point at the
 same image. The three-tag cascade is forward-compatible if Nextcloud ever
 ships a non-zero minor.
 
@@ -352,11 +353,11 @@ up first.
 **Controlling which majors CI builds**
 
 CI builds the newest `KEEP_LATEST_MAJORS` currently-supported majors (set in
-`.github/workflows/build.yml`, default `2` — i.e. the current major plus the
+`.forgejo/workflows/build.yml`, default `2` — i.e. the current major plus the
 previous one). When upstream cuts a new major the window rolls forward
 automatically and the oldest in-window major drops out — no edit needed. To
 build more or fewer, change `KEEP_LATEST_MAJORS` (set it to `0` to build every
-supported major). Existing pinned tags on ghcr.io (`v33.0.3`, etc.) remain
+supported major). Existing pinned tags in the registry (`v33.0.6`, etc.) remain
 available — they just stop receiving new builds.
 
 ## Updating the nginx config on Nextcloud major bumps

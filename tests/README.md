@@ -44,7 +44,7 @@ SCENARIO_DB=sqlite SCENARIO_REDIS=false SCENARIO_NOTIFY_PUSH=false \
 SCENARIO_CRON=none ./tests/run-all.sh
 
 # Use a specific image tag (defaults to local/nc-fpm-nginx:test)
-NC_IMAGE=ghcr.io/v3djg6gl/nextcloud-fpm-nginx:v33 ./tests/run-all.sh
+NC_IMAGE=forgejo.informethic.ch/martin-zeller/nextcloud-fpm-nginx:v34 ./tests/run-all.sh
 ```
 
 ## Scenario matrix
@@ -67,7 +67,7 @@ Notes:
 Every push runs the full cartesian matrix (`KEEP_LATEST_MAJORS` majors ×
 15 scenarios — default 2 → 30 cells) on `ubuntu-latest` + smoke (CST +
 container start) on `ubuntu-24.04-arm` (one cell per major). The `build` job
-waits on both test jobs — failed tests block the push to ghcr.io.
+waits on both test jobs — failed tests block the publish to the registry.
 
 JUnit XML is uploaded as a workflow artifact and surfaced inline on PRs
 via `mikepenz/action-junit-report`.
