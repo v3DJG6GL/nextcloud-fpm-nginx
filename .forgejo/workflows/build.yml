@@ -41,6 +41,12 @@
 #     manifest entries that Forgejo's registry has historically not
 #     accepted/displayed cleanly. Re-enable and test if desired.
 #   * permissions:, checks: — GitHub token-permission model; dropped.
+#   * No-op gate runs (cron with nothing to rebuild) emit a sentinel matrix
+#     row (version 'none') instead of an empty list + job-level skip: on
+#     Forgejo v15 a skipped job permanently blocks every job that `needs:`
+#     it — even `if: always()` — leaving the run "running" forever (fixed
+#     upstream via server-side if-evaluation, forgejo#12937/#13030). All
+#     test/build steps guard on matrix.build.version != 'none'.
 #
 # Runner prerequisites (see runner-config.yml):
 #   * ubuntu-latest label mapped to an image with docker CLI + compose,
@@ -343,6 +349,19 @@ jobs:
             builds="$filtered"
           fi
 
+          # Never emit an empty matrix. Forgejo v15's scheduler never
+          # dispatches jobs whose `needs` target was skipped — not even with
+          # `if: always()` — so a run where `test` skips (gate filtered every
+          # major) hangs forever with all-ci/build stuck "blocked" (observed:
+          # scheduled run 27; fixed upstream via server-side if-evaluation,
+          # forgejo#12937 + #13030). The sentinel row keeps test/build
+          # scheduled; every step in them guards on
+          # matrix.build.version != 'none', so no-op cells finish in seconds.
+          if [ "$builds" = "[]" ]; then
+            echo "::notice::nothing to rebuild — emitting no-op sentinel row so the run can complete (Forgejo skipped-needs bug)"
+            builds='[{"major":"none","version":"none","no_cache":false}]'
+          fi
+
           echo "Final builds:"
           echo "$builds" | jq
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
@@ -357,8 +376,10 @@ jobs:
   test:
     name: Test (amd64) — ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
     needs: compute-matrix
-    # Skip cleanly when the gate filtered every major (cron no-op).
-    if: needs.compute-matrix.outputs.builds != '[]'
+    # No job-level skip when the gate filters every major: on Forgejo v15 a
+    # skipped job permanently blocks everything that `needs:` it (see the
+    # sentinel comment in compute-matrix). Instead the job always runs and
+    # each STEP guards on the sentinel — a no-op cell completes in seconds.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -386,16 +407,19 @@ jobs:
         # push/PR events if wall-clock time becomes a problem.
     steps:
       - name: Checkout
+        if: matrix.build.version != 'none'
         uses: actions/checkout@v6
 
       # tests/bats/28-config-drift.bats runs `php -l` on the job host to
       # syntax-check a fixture. The catthehacker act image has no PHP.
       - name: Install job deps (php-cli)
+        if: matrix.build.version != 'none'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends php-cli
 
       - name: Set up Buildx
+        if: matrix.build.version != 'none'
         uses: docker/setup-buildx-action@v4
         with:
           # Resolve docker.io refs via Google's pull-through mirror. All
@@ -413,6 +437,7 @@ jobs:
       # Registry login needed here (not just in publish) because the buildx
       # cache now lives on the Forgejo registry (cache-to below).
       - name: Log in to the Forgejo registry
+        if: matrix.build.version != 'none'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -420,6 +445,7 @@ jobs:
           password: ${{ secrets.REGISTRY_TOKEN }}
 
       - name: Build amd64 image (load into dind — Pattern A)
+        if: matrix.build.version != 'none'
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -446,6 +472,7 @@ jobs:
           cache-to: ${{ matrix.scenario.id == 'sqlite-noredis-cron-none' && format('type=registry,ref={0}/{1}/{2}:buildcache-{3},mode=max,ignore-error=true', env.REGISTRY, github.repository_owner, env.IMAGE, matrix.build.major) || '' }}
 
       - name: container-structure-test (image-static assertions)
+        if: matrix.build.version != 'none'
         env:
           IMG: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
           # Fetched from this instance's `tools` generic package registry —
@@ -463,6 +490,7 @@ jobs:
             --config tests/cst/notify_push.yaml
 
       - name: Install bats-core
+        if: matrix.build.version != 'none'
         uses: bats-core/bats-action@4.0.0
         with:
           bats-version: "1.12.0"
@@ -472,6 +500,7 @@ jobs:
           file-install: false
 
       - name: Run bats suite (runtime assertions)
+        if: matrix.build.version != 'none'
         env:
           NC_IMAGE: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
           NC_MAJOR: ${{ matrix.build.major }}
@@ -485,7 +514,7 @@ jobs:
         run: ./tests/run-all.sh
 
       - name: Upload JUnit results
-        if: always()
+        if: always() && matrix.build.version != 'none'
         # GitHub's upload-artifact v4+ refuses non-github.com instances
         # ("not supported on GHES"). forgejo/upload-artifact is the local
         # mirror of Forgejo's compatible fork — NOT actions/upload-artifact,
@@ -496,7 +525,7 @@ jobs:
           path: tests/reports/*.xml
 
       - name: Surface bats failures in run summary
-        if: always()
+        if: always() && matrix.build.version != 'none'
         # Forgejo's checks API compatibility is partial — worst case this
         # step fails to post check-runs; don't let that fail the cell.
         continue-on-error: true
@@ -518,9 +547,10 @@ jobs:
       - name: Verify all required jobs succeeded
         run: |
           set -euo pipefail
-          # `skipped` is acceptable on test: the compute-matrix gate may
-          # filter every major on a cron run. compute-matrix itself must
-          # always succeed (it's the gate).
+          # With the sentinel workaround, a gate no-op reports test=success
+          # (all steps skipped). `skipped` stays accepted for the day the
+          # Forgejo skipped-needs fix lands and a job-level skip returns.
+          # compute-matrix itself must always succeed (it's the gate).
           if [ "${{ needs.compute-matrix.result }}" != success ]; then
             echo "::error::compute-matrix=${{ needs.compute-matrix.result }}"
             exit 1
@@ -539,9 +569,11 @@ jobs:
   build:
     name: Build & push — v${{ matrix.build.version }}
     # Skip pushes on PRs — PR builds must not clobber published tags. The
-    # push runs on the merge commit (push to master) instead. Also skip
-    # when the gate filtered every major.
-    if: github.event_name != 'pull_request' && needs.compute-matrix.outputs.builds != '[]'
+    # push runs on the merge commit (push to master) instead. (This own-if
+    # skip is safe on Forgejo v15 because nothing `needs:` this job; the
+    # gate-filtered-everything case is handled by the sentinel row + step
+    # guards, NOT a job-level skip — see compute-matrix.)
+    if: github.event_name != 'pull_request'
     needs: [compute-matrix, test]
     runs-on: ubuntu-latest
     strategy:
@@ -550,9 +582,11 @@ jobs:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
     steps:
       - name: Checkout
+        if: matrix.build.version != 'none'
         uses: actions/checkout@v6
 
       - name: Set up Buildx
+        if: matrix.build.version != 'none'
         uses: docker/setup-buildx-action@v4
         with:
           # Same Docker Hub mirror as the test job — see comment there.
@@ -561,6 +595,7 @@ jobs:
               mirrors = ["mirror.gcr.io"]
 
       - name: Log in to the Forgejo registry
+        if: matrix.build.version != 'none'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -568,6 +603,7 @@ jobs:
           password: ${{ secrets.REGISTRY_TOKEN }}
 
       - id: meta
+        if: matrix.build.version != 'none'
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}
@@ -586,6 +622,7 @@ jobs:
       # those seconds just causes one extra rebuild next run).
       - id: base
         name: Resolve upstream base digest
+        if: matrix.build.version != 'none'
         env:
           # renovate: datasource=github-releases depName=google/go-containerregistry
           # Fetched from this instance's `tools` generic package registry —
@@ -611,6 +648,7 @@ jobs:
           echo "base_digest=$base_digest" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v7
+        if: matrix.build.version != 'none'
         with:
           context: .
           platforms: linux/amd64
