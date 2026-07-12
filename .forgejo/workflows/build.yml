@@ -23,7 +23,10 @@
 #   * Actions are referenced unqualified (owner/repo@ref): the instance sets
 #     DEFAULT_ACTIONS_URL to itself, so refs resolve against local pull
 #     mirrors (orgs: actions, docker, bats-core, mikepenz, forgejo) — job
-#     startup has no GitHub dependency. REQUIRES app.ini
+#     startup has no GitHub dependency. Composite actions resolve their
+#     nested `uses:` through the same mechanism — actions/cache is mirrored
+#     solely because bats-action calls it internally; a missing nested
+#     mirror fails the job mid-run ("unable to clone .../actions/cache"). REQUIRES app.ini
 #     [actions] DEFAULT_ACTIONS_URL = https://forgejo.informethic.ch (and a
 #     server restart): without it, unqualified refs silently fall back to
 #     code.forgejo.org, which lacks bats-core/bats-action — every test cell
