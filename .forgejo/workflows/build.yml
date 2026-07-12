@@ -71,7 +71,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  REGISTRY: forgejo.example.ch
+  REGISTRY: forgejo.informethic.ch
   IMAGE: nextcloud-fpm-nginx
 
 jobs:
