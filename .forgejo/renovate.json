@@ -18,19 +18,11 @@
   "vulnerabilityAlerts": {
     "minimumReleaseAge": null
   },
+  "osvVulnerabilityAlerts": true,
   "ignoreDeps": ["nextcloud"],
-  "customManagers": [
-    {
-      "customType": "regex",
-      "description": "Track GitHub Actions wrapped by Wandalen/wretry.action. Renovate's github-actions manager only reads `uses:`, not the nested `action:` input wretry takes, so without this the retry-wrapped actions (setup-buildx, checkout, login, …) would silently stop receiving updates.",
-      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
-      "matchStrings": ["action:\\s+(?<depName>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)@(?<currentValue>[A-Za-z0-9._+-]+)"],
-      "datasourceTemplate": "github-tags"
-    }
-  ],
   "packageRules": [
     {
-      "description": "Group all GitHub Actions bumps into one PR.",
+      "description": "Group all Actions bumps (github-actions manager also covers .forgejo/workflows) into one PR.",
       "matchManagers": ["github-actions"],
       "groupName": "github-actions"
     },
@@ -44,32 +36,27 @@
       "groupName": "debian-apt"
     },
     {
-      "description": "Exempt the deb datasource from the global 3-day minimumReleaseAge. Two reasons: the debian-apt group's whole point is picking up trixie-security rebuilds, which must not wait out an age gate (and the vulnerabilityAlerts fast path can't help - that only covers GitHub's advisory DB, which has no deb coverage); and the deb datasource may not supply releaseTimestamps, which under internalChecksFilter=strict would silently freeze apt bumps forever rather than delay them.",
+      "description": "Exempt the deb datasource from the global 3-day minimumReleaseAge. Two reasons: the debian-apt group's whole point is picking up trixie-security rebuilds, which must not wait out an age gate (and the vulnerabilityAlerts fast path can't help - that only covers GitHub's advisory DB, which has no deb coverage and is inert on the Forgejo platform anyway; osvVulnerabilityAlerts likewise has no deb coverage); and the deb datasource may not supply releaseTimestamps, which under internalChecksFilter=strict would silently freeze apt bumps forever rather than delay them.",
       "matchDatasources": ["deb"],
       "minimumReleaseAge": null
     },
     {
       "description": "Standalone bumps for tool versions tracked in build.yml (crane, etc.).",
       "matchDatasources": ["github-releases", "github-tags"],
-      "matchFileNames": [".github/workflows/**"]
+      "matchFileNames": [".forgejo/workflows/**", ".github/workflows/**"]
     },
     {
-      "description": "Major bumps require manual review — surface as checkboxes on the Dependency Dashboard, do not open the PR automatically, do not auto-merge. Minor/patch still flow through automerge gated by all-ci.",
+      "description": "Major bumps require manual review — surface as checkboxes on the Dependency Dashboard, do not open the PR automatically, do not auto-merge. Minor/patch still flow through automerge gated by all-ci (which must be a required status check in the Forgejo branch protection for platformAutomerge to wait on it).",
       "matchUpdateTypes": ["major"],
       "automerge": false,
       "dependencyDashboardApproval": true
     },
     {
-      "description": "Keep GitHub Actions on floating major tags (@vN), including the wretry-wrapped `action:` inputs the custom regex manager tracks. Suppress pin/patch/minor so they are never pinned to an exact patch (GitHub moves the @vN tag, so patch fixes land at runtime without a PR); a new MAJOR still surfaces via the rule above. This matches how the unwrapped `uses:` actions already behave and stops the one-PR-per-action churn the regex manager would otherwise create.",
-      "matchFileNames": [".github/workflows/**"],
+      "description": "Keep workflow actions on floating major tags (@vN). Suppress pin/patch/minor so they are never pinned to an exact patch (upstream moves the @vN tag, so patch fixes land at runtime without a PR); a new MAJOR still surfaces via the rule above. Applies to both the Forgejo workflows and any remaining GitHub workflow copy.",
+      "matchFileNames": [".forgejo/workflows/**", ".github/workflows/**"],
       "matchDatasources": ["github-tags"],
       "matchUpdateTypes": ["pin", "patch", "minor"],
       "enabled": false
-    },
-    {
-      "description": "Exempt wretry.action from the floating-major suppression above. Unlike the wrapped actions it is exact-pinned (it executes arbitrary nested actions, so we want reviewed updates, not a moving tag), so it must keep receiving patch/minor bump PRs — e.g. a future Node 24 release that clears the runner's node20-deprecation warning. Without this, the rule above would freeze it at v3.8.0 until a new MAJOR.",
-      "matchDepNames": ["Wandalen/wretry.action"],
-      "enabled": true
     }
   ]
 }
