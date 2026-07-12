@@ -418,7 +418,13 @@ jobs:
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }},mode=max
+          # Exactly ONE cell per major exports the cache (every cell imports).
+          # All 15 scenario cells build the identical image, and 15 concurrent
+          # cache pushes to the same tag race in Forgejo's package DB — the
+          # registry 500s on concurrent manifest PUTs of one tag, failing the
+          # whole build step. ignore-error tolerates a transient 500 on the
+          # one export too: worst case the cache is one run stale (fail-open).
+          cache-to: ${{ matrix.scenario.id == 'sqlite-noredis-cron-none' && format('type=registry,ref={0}/{1}/{2}:buildcache-{3},mode=max,ignore-error=true', env.REGISTRY, github.repository_owner, env.IMAGE, matrix.build.major) || '' }}
 
       - name: container-structure-test (image-static assertions)
         env:
