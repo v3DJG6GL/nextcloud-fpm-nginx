@@ -80,12 +80,29 @@ RUN set -eux; \
     [ "$ver" = "notify_push ${NOTIFY_PUSH_VERSION}" ] \
         || { echo "notify_push version mismatch: got '$ver', want 'notify_push ${NOTIFY_PUSH_VERSION}'" >&2; exit 1; }
 
-COPY nginx.conf                                     /etc/nginx/nginx.conf
-COPY snippets/nc-security-headers.conf              /etc/nginx/snippets/nc-security-headers.conf
-COPY supervisord.conf                               /etc/supervisor/supervisord.conf
+# --chmod on EVERY COPY: without it the modes of the checkout propagate
+# into the image, so the published artifact depends on the CI runner's
+# umask/filesystem (observed: a runner whose workspace forced 0770 on all
+# files shipped an executable group-writable nginx.conf).
+COPY --chmod=0644 nginx.conf                                     /etc/nginx/nginx.conf
+COPY --chmod=0644 snippets/nc-security-headers.conf              /etc/nginx/snippets/nc-security-headers.conf
+COPY --chmod=0644 supervisord.conf                               /etc/supervisor/supervisord.conf
 COPY --chmod=0755 scripts/entrypoint.sh             /usr/local/bin/container-entrypoint.sh
 COPY --chmod=0755 scripts/render-overrides.sh       /usr/local/bin/render-overrides.sh
 COPY --chmod=0755 scripts/notify-push-wrapper.sh    /usr/local/bin/notify-push-wrapper.sh
+
+# Belt-and-braces mode enforcement in a RUN layer. Not redundant: BuildKit
+# has been observed serving a `COPY --chmod=0755` step's cached result with
+# the chmod NOT applied (registry-cache-imported fileop; layer carried the
+# raw checkout mode 0770). A RUN executes in a container and its recorded
+# result is the actual snapshot diff, so it cannot lose the chmod the same
+# way. Costs one tiny metadata layer.
+RUN chmod 0755 /usr/local/bin/container-entrypoint.sh \
+               /usr/local/bin/render-overrides.sh \
+               /usr/local/bin/notify-push-wrapper.sh \
+ && chmod 0644 /etc/nginx/nginx.conf \
+               /etc/nginx/snippets/nc-security-headers.conf \
+               /etc/supervisor/supervisord.conf
 
 # Best-practice pattern for containers with very-long first-boot init
 # (Docker 25.0+ added `--start-interval` exactly for this case — see
