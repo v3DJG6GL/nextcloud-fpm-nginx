@@ -1,14 +1,42 @@
+# .forgejo/workflows/build.yml
+#
+# Forgejo Actions port of the GitHub workflow. Structural changes vs. the
+# GitHub original:
+#
+#   * Registry: ghcr.io -> self-hosted Forgejo container registry (REGISTRY
+#     env below). Auth via a PAT (secrets.REGISTRY_USER / REGISTRY_TOKEN,
+#     scope package:read for the gate, package:write for publish) instead of
+#     the ephemeral GITHUB_TOKEN.
+#   * Removed all GitHub-VM plumbing: mirror.gcr.io daemon.json rewrites
+#     (impossible in a container job; put --registry-mirror on the dind
+#     daemon instead if wanted), free-disk-space, wretry retry wrappers,
+#     buildkit boot-image pin + buildkitd-mirror.toml.
+#   * arm64 dropped entirely (no ARM runner; QEMU builds not worth it) —
+#     test-arm64-smoke job deleted, publish is linux/amd64 only.
+#   * Buildx cache: type=gha -> type=registry on the Forgejo registry
+#     (deterministic; the runner's GHA-compatible cache server may also
+#     work with type=gha, but registry cache has no compat question).
+#   * Actions are referenced fully-qualified (https://github.com/...) so
+#     resolution never depends on DEFAULT_ACTIONS_URL / what
+#     code.forgejo.org happens to mirror.
+#   * provenance/sbom disabled: buildx attestations create unknown/unknown
+#     manifest entries that Forgejo's registry has historically not
+#     accepted/displayed cleanly. Re-enable and test if desired.
+#   * permissions:, checks: — GitHub token-permission model; dropped.
+#
+# Runner prerequisites (see runner-config.yml):
+#   * ubuntu-latest label mapped to an image with docker CLI + compose,
+#     e.g. docker://ghcr.io/catthehacker/ubuntu:act-22.04
+#   * container.docker_host left at default ("") so job containers get the
+#     runner's DOCKER_HOST (the shared dind daemon) for buildx/load/compose.
+
 name: build
 
 on:
   push:
     branches: [main, master]
-    # Paths filter on push only — saves a full-matrix run on the squash-merge
-    # commits whose touched files don't actually affect the image (READMEs,
-    # docs, etc.). compose.yaml is the documented production deployment; include
-    # it so changes to the shipped topology (image ref, postgres/redis tags
-    # users run) re-trigger validation. The test-service tags themselves live in
-    # tests/compose/*.yaml, already covered by the tests/** entry below.
+    # Paths filter on push only — saves a full-matrix run on commits whose
+    # touched files don't affect the image (READMEs, docs, …).
     paths:
       - Dockerfile
       - nginx.conf
@@ -17,11 +45,9 @@ on:
       - scripts/**
       - tests/**
       - compose.yaml
-      - .github/workflows/build.yml
+      - .forgejo/workflows/build.yml
   # No paths filter on pull_request — every PR must run the full matrix so
-  # the required `all-ci` check actually reports. Otherwise PRs that touch
-  # files outside the push filter (compose.yaml, renovate.json, README, …)
-  # stay BLOCKED forever waiting for a status check that never runs.
+  # the required `all-ci` check actually reports.
   pull_request:
   workflow_dispatch:
     inputs:
@@ -30,38 +56,23 @@ on:
         type: boolean
         default: false
   schedule:
-    # 05:25 + 17:35 UTC — every scheduled run applies BOTH gates:
-    #   digest-drift gate → picks up versions.json bumps and in-place upstream
-    #     rebuilds of nextcloud:<ver>-fpm (Debian/PHP CVEs).
-    #   staleness gate    → if a major's published image is >=14d old AND
-    #     hasn't been picked up by the digest gate (upstream hasn't rebuilt
-    #     the base recently either), force a no-cache rebuild so transitive
-    #     apt deps (libssl, pcre, zlib, …) get re-resolved against current
-    #     Debian repos. Running this check daily (instead of on a fixed
-    #     weekday) means rebuild fires within 24h of age crossing 14d,
-    #     instead of up to 7d later.
-    # A run where nothing has drifted AND nothing is stale is a ~30s no-op.
-    #
-    # Off-peak minutes (:25 / :35) avoid the top-of-hour contention GitHub
-    # flags as high-load, and hours 05/17 UTC stay clear of the 22:00–02:00
-    # UTC midnight congestion band — both cut the chance of a delayed or
-    # dropped scheduled run. Two entries because the minutes differ.
+    # Twice daily; both gates apply (digest drift + >=14d staleness).
+    # A run where nothing drifted and nothing is stale is a ~30s no-op.
+    # (The GitHub off-peak-minute reasoning no longer applies on a
+    # self-hosted runner — times are arbitrary.)
     - cron: '25 5 * * *'
     - cron: '35 17 * * *'
 
 # Cancel superseded PR runs (push/schedule runs are kept to avoid disrupting
-# in-flight publishes to ghcr.io).
+# in-flight publishes). Note: older Forgejo versions ignore `concurrency`
+# entirely — harmless if so.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-  attestations: write
-  # mikepenz/action-junit-report posts bats failures as per-cell check-runs.
-  checks: write
+env:
+  REGISTRY: forgejo.example.ch
+  IMAGE: nextcloud-fpm-nginx
 
 jobs:
   compute-matrix:
@@ -71,12 +82,8 @@ jobs:
       builds: ${{ steps.set.outputs.builds }}
       latest: ${{ steps.set.outputs.latest }}
     steps:
-      - name: Checkout (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: actions/checkout@v6
-          attempt_limit: 3
-          attempt_delay: 10000
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v6
 
       - name: Install crane
         env:
@@ -89,12 +96,12 @@ jobs:
             | sudo tar -xz -C /usr/local/bin crane
           crane version
 
-      - name: Log crane in to ghcr.io
+      - name: Log crane in to the Forgejo registry
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
-          echo "$TOKEN" | crane auth login ghcr.io \
-            --username "${{ github.actor }}" \
+          echo "$TOKEN" | crane auth login "$REGISTRY" \
+            --username "${{ secrets.REGISTRY_USER }}" \
             --password-stdin
 
       - id: set
@@ -103,31 +110,26 @@ jobs:
           EVENT: ${{ github.event_name }}
           FORCE: ${{ github.event.inputs.force }}
           OWNER: ${{ github.repository_owner }}
-          IMAGE: nextcloud-fpm-nginx
           STALENESS_DAYS: '14'
-          # Build only the newest N currently-supported majors (rolling window).
-          # 0 = build every supported major. Applied in the matrix-compute step.
+          # Build only the newest N currently-supported majors (rolling
+          # window). 0 = build every supported major.
           KEEP_LATEST_MAJORS: '2'
         run: |
           set -euo pipefail
 
-          # GHCR repository paths are lowercase, but github.repository_owner can
-          # be mixed-case (e.g. v3DJG6GL). crane rejects an upper-case ref, and
-          # the digest gate below swallows that error (2>/dev/null) — reading it
-          # as "ghcr-tag-missing" and forcing a full rebuild+push of every major
-          # on EVERY scheduled run. Lower-case once here so the gate finds our
-          # own published image. (The publish job is unaffected: metadata-action
-          # lower-cases the image ref itself.)
+          # Registry repository paths are lowercase, but repository_owner can
+          # be mixed-case. crane rejects an upper-case ref, and the digest
+          # gate below swallows that error (2>/dev/null) — reading it as
+          # "registry-tag-missing" and forcing a full rebuild+push of every
+          # major on EVERY scheduled run. Lower-case once here. (The publish
+          # job is unaffected: metadata-action lower-cases the ref itself.)
           owner_lc=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
 
-          # Build only the newest KEEP_LATEST_MAJORS supported majors. Upstream's
-          # versions.json lists every currently-supported major; we sort ascending
-          # and keep the last N. KEEP_LATEST_MAJORS=0 builds every supported major
-          # (no cap). When upstream cuts a new major the window rolls forward on its
-          # own — the oldest in-window major drops out with no file edit, and the
-          # new one is picked up automatically once its base image is published.
-          # Existing pinned tags on ghcr.io stay available; they just stop getting
-          # new builds.
+          # Build only the newest KEEP_LATEST_MAJORS supported majors.
+          # Upstream's versions.json lists every currently-supported major;
+          # sort ascending, keep the last N. When upstream cuts a new major
+          # the window rolls forward on its own. Existing pinned tags on the
+          # registry stay available; they just stop getting new builds.
           keep="${KEEP_LATEST_MAJORS:-0}"
           case "$keep" in
             ''|*[!0-9]*)
@@ -135,11 +137,11 @@ jobs:
               exit 1
               ;;
           esac
-          # Strip leading zeros so jq --argjson gets valid JSON ("08" is not).
           keep=$((10#$keep))
           echo "Keep latest majors: $( [ "$keep" -eq 0 ] && echo '<all>' || echo "$keep" )"
 
-          curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors https://raw.githubusercontent.com/nextcloud/docker/master/versions.json \
+          curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
+            https://raw.githubusercontent.com/nextcloud/docker/master/versions.json \
             > versions.json
 
           jq -c --argjson keep "$keep" '
@@ -156,17 +158,12 @@ jobs:
           # versions.json is bumped by upstream nextcloud/docker BEFORE the
           # matching nextcloud:<ver>-fpm image is published to Docker Hub —
           # a multi-hour race. Building FROM a not-yet-published base fails
-          # the whole cell ("not found"). Drop a major only when its base tag
-          # is GENUINELY absent (registry says MANIFEST_UNKNOWN / 404); on a
-          # transient error keep it (fail-open) so a hiccup never silently
-          # narrows the matrix.
+          # the whole cell. Drop a major only when its base tag is GENUINELY
+          # absent; on a transient error keep it (fail-open).
           #
-          # On a manual `workflow_dispatch` we don't make the operator wait out
-          # the race: if the exact patch isn't published yet we fall back to the
-          # latest published <major>.x.y-fpm patch so the "Run workflow" button
-          # always yields a buildable matrix. Scheduled/push/PR runs keep waiting
-          # — the next digest gate picks up the new patch automatically once the
-          # tag lands.
+          # On a manual workflow_dispatch, fall back to the latest published
+          # <major>.x.y-fpm patch so the "Run workflow" button always yields
+          # a buildable matrix. Scheduled/push/PR runs keep waiting.
           base_status() {
             # 0 = exists, 1 = genuinely absent, 2 = undetermined (transient)
             local ref="$1" out
@@ -183,8 +180,8 @@ jobs:
             return 2
           }
 
-          # Newest published <major>.x.y-fpm patch on Docker Hub (empty if none).
-          # `-fpm$` anchor excludes -fpm-alpine and bare <major>-fpm rolling tags.
+          # Newest published <major>.x.y-fpm patch on Docker Hub (empty if
+          # none). `-fpm$` anchor excludes -fpm-alpine and rolling tags.
           latest_published_patch() {
             local major="$1"
             crane ls docker.io/library/nextcloud 2>/dev/null \
@@ -237,7 +234,7 @@ jobs:
 
           # ── Gate selection ───────────────────────────────────────────────
           # push / pull_request  → full matrix (paths filter already gated)
-          # workflow_dispatch    → full matrix when force=true, else gates apply
+          # workflow_dispatch    → full matrix when force=true, else gates
           # schedule             → both gates apply
           # ─────────────────────────────────────────────────────────────────
           apply_gates=no
@@ -256,27 +253,25 @@ jobs:
             while IFS= read -r row; do
               major=$(jq -r '.major' <<<"$row")
               version=$(jq -r '.version' <<<"$row")
-              ghcr_ref="ghcr.io/${owner_lc}/${IMAGE}:v${version}"
+              reg_ref="${REGISTRY}/${owner_lc}/${IMAGE}:v${version}"
               upstream_ref="docker.io/library/nextcloud:${version}-fpm"
-
               keep_reason=""
               no_cache=false
 
-              # Digest-gate: failure to resolve upstream is fail-open (rebuild)
-              # so a registry hiccup never silently leaves us on a stale base.
+              # Digest-gate: failure to resolve upstream is fail-open
+              # (rebuild) so a registry hiccup never silently leaves us on a
+              # stale base.
               upstream_digest=$(crane digest "$upstream_ref" 2>/dev/null || true)
               if [ -z "$upstream_digest" ]; then
                 echo "::warning::[$major] could not resolve $upstream_ref — including in build (fail-open)"
                 keep_reason="upstream-resolve-failed"
               else
                 # Resolve our own published config. Distinguish a genuine
-                # "not published yet" (404 / MANIFEST_UNKNOWN → legitimate
-                # ghcr-tag-missing rebuild, e.g. a brand-new major) from ANY
-                # other crane failure (bad ref, auth, transient registry error).
-                # The error class previously fell through to "ghcr-tag-missing"
-                # and silently forced a rebuild every run — capture stderr and
-                # surface it loudly instead so a future ref bug can't hide.
-                if our_cfg=$(crane config "$ghcr_ref" 2>config_err); then
+                # "not published yet" (404 → legitimate tag-missing rebuild,
+                # e.g. a brand-new major) from ANY other crane failure (bad
+                # ref, auth, transient error) — surface those loudly instead
+                # of silently rebuilding every run.
+                if our_cfg=$(crane config "$reg_ref" 2>config_err); then
                   our_digest=$(jq -r '.config.Labels["org.opencontainers.image.base.digest"] // empty' <<<"$our_cfg")
                   if [ -z "$our_digest" ]; then
                     keep_reason="base-digest-label-missing"
@@ -284,18 +279,17 @@ jobs:
                     keep_reason="base-digest-drift ($our_digest -> $upstream_digest)"
                   fi
                 elif grep -qiE 'MANIFEST_UNKNOWN|NAME_UNKNOWN|not found|404' config_err; then
-                  keep_reason="ghcr-tag-missing"
+                  keep_reason="registry-tag-missing"
                 else
-                  echo "::warning::[$major] crane config $ghcr_ref failed (not a 404) — building (fail-open). crane: $(tr '\n' ' ' <config_err)"
-                  keep_reason="ghcr-config-error"
+                  echo "::warning::[$major] crane config $reg_ref failed (not a 404) — building (fail-open). crane: $(tr '\n' ' ' <config_err)"
+                  keep_reason="registry-config-error"
                 fi
               fi
 
-              # Staleness-gate: only run when no digest-rebuild already queued
-              # (a digest rebuild naturally invalidates the cached apt layer
-              # anyway, so no-cache would be redundant). Force no-cache for
-              # any major whose published image hasn't been refreshed in
-              # STALENESS_DAYS — refreshes transitive apt deps (libssl etc.).
+              # Staleness-gate: only when no digest-rebuild already queued.
+              # Force no-cache for any major whose published image hasn't
+              # been refreshed in STALENESS_DAYS — refreshes transitive apt
+              # deps (libssl, pcre, zlib, …).
               if [ -z "$keep_reason" ] && [ -n "${our_cfg:-}" ]; then
                 created=$(jq -r '.config.Labels["org.opencontainers.image.created"] // empty' <<<"$our_cfg")
                 if [ -z "$created" ]; then
@@ -314,18 +308,12 @@ jobs:
               if [ -n "$keep_reason" ]; then
                 echo "[$major] REBUILD (no_cache=$no_cache): $keep_reason"
                 filtered=$(jq -c \
-                  --arg major   "$major" \
+                  --arg major "$major" \
                   --arg version "$version" \
-                  --argjson nc  "$no_cache" \
+                  --argjson nc "$no_cache" \
                   '. + [{ major: $major, version: $version, no_cache: $nc }]' \
                   <<<"$filtered")
               else
-                # Surface the healthy no-op as a run annotation (::notice::,
-                # blue) — mirrors the visibility of the "not published yet"
-                # ::warning:: so a clean cron run leaves a breadcrumb on the
-                # summary instead of only a buried echo. Plain `echo` lines
-                # never become annotations; only ::notice::/::warning::/::error::
-                # do.
                 echo "::notice::[$major] up to date — base digest matches upstream and image is fresh; skipping rebuild (v$version)"
               fi
             done < <(jq -c '.[]' full-builds.json)
@@ -334,20 +322,19 @@ jobs:
 
           echo "Final builds:"
           echo "$builds" | jq
-
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
 
   # ─── amd64 test (Pattern A: build → load → test → only-then-push) ───
   # For each <major> × <scenario> cell:
-  #   1. Build amd64-only into the local docker daemon (load: true).
+  #   1. Build amd64 into the shared dind daemon (load: true).
   #   2. Run container-structure-test against the static image.
   #   3. Boot a docker compose fixture + run bats runtime tests.
   # The `build` job below blocks on this passing.
   test:
     name: Test (amd64) — ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
     needs: compute-matrix
-    # Skip cleanly when the base-digest gate filtered every major (cron no-op).
+    # Skip cleanly when the gate filtered every major (cron no-op).
     if: needs.compute-matrix.outputs.builds != '[]'
     runs-on: ubuntu-latest
     strategy:
@@ -355,112 +342,67 @@ jobs:
       matrix:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
         scenario:
-          - { id: sqlite-noredis-cron-none,            db: sqlite,   redis: 'false', notify_push: 'false', cron: none        }
-          - { id: sqlite-noredis-cron-incontainer,     db: sqlite,   redis: 'false', notify_push: 'false', cron: incontainer }
-          - { id: sqlite-noredis-cron-sidecar,         db: sqlite,   redis: 'false', notify_push: 'false', cron: sidecar     }
-          - { id: postgres-redis-notify-cron-none,     db: postgres, redis: 'true',  notify_push: 'true',  cron: none        }
-          - { id: postgres-redis-notify-cron-incontainer, db: postgres, redis: 'true', notify_push: 'true', cron: incontainer }
-          - { id: postgres-redis-notify-cron-sidecar,  db: postgres, redis: 'true',  notify_push: 'true',  cron: sidecar     }
-          - { id: postgres-redis-nopush-cron-none,     db: postgres, redis: 'true',  notify_push: 'false', cron: none        }
-          - { id: postgres-redis-nopush-cron-incontainer, db: postgres, redis: 'true', notify_push: 'false', cron: incontainer }
-          - { id: postgres-redis-nopush-cron-sidecar,  db: postgres, redis: 'true',  notify_push: 'false', cron: sidecar     }
-          - { id: mysql-redis-notify-cron-none,        db: mysql,    redis: 'true',  notify_push: 'true',  cron: none        }
-          - { id: mysql-redis-notify-cron-incontainer, db: mysql,    redis: 'true',  notify_push: 'true',  cron: incontainer }
-          - { id: mysql-redis-notify-cron-sidecar,     db: mysql,    redis: 'true',  notify_push: 'true',  cron: sidecar     }
-          - { id: mysql-redis-nopush-cron-none,        db: mysql,    redis: 'true',  notify_push: 'false', cron: none        }
-          - { id: mysql-redis-nopush-cron-incontainer, db: mysql,    redis: 'true',  notify_push: 'false', cron: incontainer }
-          - { id: mysql-redis-nopush-cron-sidecar,     db: mysql,    redis: 'true',  notify_push: 'false', cron: sidecar     }
-        # KEEP_LATEST_MAJORS majors × 15 scenarios (default 2 → 30 matrix cells)
+          - { id: sqlite-noredis-cron-none,                db: sqlite,   redis: 'false', notify_push: 'false', cron: none }
+          - { id: sqlite-noredis-cron-incontainer,         db: sqlite,   redis: 'false', notify_push: 'false', cron: incontainer }
+          - { id: sqlite-noredis-cron-sidecar,             db: sqlite,   redis: 'false', notify_push: 'false', cron: sidecar }
+          - { id: postgres-redis-notify-cron-none,         db: postgres, redis: 'true',  notify_push: 'true',  cron: none }
+          - { id: postgres-redis-notify-cron-incontainer,  db: postgres, redis: 'true',  notify_push: 'true',  cron: incontainer }
+          - { id: postgres-redis-notify-cron-sidecar,      db: postgres, redis: 'true',  notify_push: 'true',  cron: sidecar }
+          - { id: postgres-redis-nopush-cron-none,         db: postgres, redis: 'true',  notify_push: 'false', cron: none }
+          - { id: postgres-redis-nopush-cron-incontainer,  db: postgres, redis: 'true',  notify_push: 'false', cron: incontainer }
+          - { id: postgres-redis-nopush-cron-sidecar,      db: postgres, redis: 'true',  notify_push: 'false', cron: sidecar }
+          - { id: mysql-redis-notify-cron-none,            db: mysql,    redis: 'true',  notify_push: 'true',  cron: none }
+          - { id: mysql-redis-notify-cron-incontainer,     db: mysql,    redis: 'true',  notify_push: 'true',  cron: incontainer }
+          - { id: mysql-redis-notify-cron-sidecar,         db: mysql,    redis: 'true',  notify_push: 'true',  cron: sidecar }
+          - { id: mysql-redis-nopush-cron-none,            db: mysql,    redis: 'true',  notify_push: 'false', cron: none }
+          - { id: mysql-redis-nopush-cron-incontainer,     db: mysql,    redis: 'true',  notify_push: 'false', cron: incontainer }
+          - { id: mysql-redis-nopush-cron-sidecar,         db: mysql,    redis: 'true',  notify_push: 'false', cron: sidecar }
+        # KEEP_LATEST_MAJORS majors × 15 scenarios (default 2 → 30 cells).
+        # NOTE: on a single self-hosted runner these queue up to the
+        # runner's `capacity` — consider trimming the scenario list for
+        # push/PR events if wall-clock time becomes a problem.
     steps:
-      # Reclaim ~25 GiB of preinstalled toolchains we don't use (Android SDK,
-      # .NET, Haskell, large apt packages, pre-pulled Docker images). GH-hosted
-      # ubuntu-latest only guarantees ~14 GiB free, which the heaviest matrix
-      # cells eat through: nextcloud:<ver>-fpm base (~1.4 GiB) + our derived
-      # image (~1.5 GiB) + MariaDB/Postgres + Redis + the Nextcloud install
-      # data volume. `mysql-redis-nopush-cron-incontainer` is where it first
-      # ran us into "Free space left: 65 MB".
-      # Keeping swap-storage (PHP/NC install spike RAM) and tool-cache
-      # (some actions resolve node from /opt/hostedtoolcache).
-      # Pinned to v1.3.1 == main HEAD as of 2024-08; GPG-verified commit.
-      - name: Free disk space on runner
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-        with:
-          android: 'true'
-          dotnet: 'true'
-          haskell: 'true'
-          # large-packages MUST stay false: it removes `php.*` from the host,
-          # and tests/bats/28-config-drift.bats:24 runs `php -l` on the host
-          # to syntax-check a fixture file (exit 127 = command not found).
-          # Keeping it off costs ~5.3 GiB of reclaim, leaves us still ~20 GiB.
-          large-packages: 'false'
-          docker-images: 'true'
-          swap-storage: 'false'
-          tool-cache: 'false'
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v6
 
-      - name: Point Docker Hub pulls at mirror.gcr.io (fallback)
-        # Docker Hub (registry-1.docker.io) intermittently times out / rate-limits.
-        # Route docker.io through Google's pull-through mirror (which falls back to
-        # Docker Hub if the mirror misses/errors):
-        #  - host daemon (registry-mirrors): the buildkit boot image, the
-        #    postgres/redis/mariadb test services, and qemu's binfmt image.
-        #  - buildkit (buildkitd-mirror.toml, read by Set up Buildx): the
-        #    nextcloud:<ver>-fpm base pulls, which run inside the buildkit
-        #    container and bypass the daemon mirror.
+      # tests/bats/28-config-drift.bats runs `php -l` on the job host to
+      # syntax-check a fixture. The catthehacker act image has no PHP.
+      - name: Install job deps (php-cli)
         run: |
-          set -eux
-          sudo mkdir -p /etc/docker
-          existing=$(cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
-          echo "$existing" | jq '. + {"registry-mirrors":["https://mirror.gcr.io"]}' \
-            | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl restart docker
-          printf '[registry."docker.io"]\n  mirrors = ["mirror.gcr.io"]\n' > /tmp/buildkitd-mirror.toml
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends php-cli
 
-      - name: Checkout (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
+      - name: Set up Buildx
+        uses: https://github.com/docker/setup-buildx-action@v4
+
+      # Registry login needed here (not just in publish) because the buildx
+      # cache now lives on the Forgejo registry (cache-to below).
+      - name: Log in to the Forgejo registry
+        uses: https://github.com/docker/login-action@v4
         with:
-          action: actions/checkout@v6
-          attempt_limit: 3
-          attempt_delay: 10000
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
 
-      - name: Set up Buildx (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: docker/setup-buildx-action@v4
-          attempt_limit: 3
-          attempt_delay: 10000
-          # Boot the builder from a gcr.io image ref, NOT docker.io + the host
-          # daemon mirror: a daemon registry-mirror serves image *content* from
-          # the mirror but still probes registry-1.docker.io/v2/ for the auth
-          # handshake, and that probe times out during Docker Hub blips (PR #11 /
-          # run 27344118014 — one cell red on "Get registry-1.docker.io/v2/:
-          # context deadline exceeded" despite the mirror). A gcr.io image ref
-          # avoids docker.io entirely for boot. buildkitd-config additionally
-          # routes build-time base pulls (nextcloud:<ver>-fpm) through the mirror.
-          with: |
-            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
-            buildkitd-config: /tmp/buildkitd-mirror.toml
-
-      - name: Build amd64 image (load locally — Pattern A)
-        uses: docker/build-push-action@v7
+      - name: Build amd64 image (load into dind — Pattern A)
+        uses: https://github.com/docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
           load: true
-          # Force-pull the base manifest so we test the SAME nextcloud:<ver>-fpm
-          # the publish build ships (it also sets pull: true). Without this, a
-          # digest-drift rebuild (no_cache=false) resolves the base from cache
+          # Force-pull the base manifest so we test the SAME
+          # nextcloud:<ver>-fpm the publish build ships. Without this, a
+          # digest-drift rebuild resolves the base from dind's local cache
           # and would validate the OLD base while publish pulls the NEW one.
           pull: true
-          # Match the publish build: when the staleness gate sets no_cache, test
-          # the freshly-resolved apt layers (libssl/pcre/zlib/…) that will
-          # actually ship, not stale cached ones. Costs a full uncached build on
-          # staleness runs only — digest-drift rebuilds keep no_cache=false.
+          # Match the publish build: when the staleness gate sets no_cache,
+          # test the freshly-resolved apt layers that will actually ship.
           no-cache: ${{ matrix.build.no_cache }}
           tags: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
-          cache-from: type=gha,scope=nc-${{ matrix.build.major }}-amd64
-          cache-to: type=gha,scope=nc-${{ matrix.build.major }}-amd64,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }},mode=max
 
       - name: container-structure-test (image-static assertions)
         env:
@@ -477,28 +419,11 @@ jobs:
             --config tests/cst/php.yaml \
             --config tests/cst/notify_push.yaml
 
-      # NOT wretry-wrapped: bats-action has a `pre` cache-restore hook, and
-      # wretry runs the wrapped action's pre/post. Unwrapped, that restore's
-      # `tar exit 2` is a non-fatal warning; under wretry the pre failure is
-      # FATAL and skips every downstream step (observed: run 27341721315, all
-      # amd64 cells red on "Pre Install bats-core"). Its download-flake risk is
-      # low, so retry isn't worth breaking it. The `*-install:false` inputs below
-      # also stop those failing helper-cache restores from running at all.
       - name: Install bats-core
-        uses: bats-core/bats-action@4.0.0
-        # Our suite loads only our own tests/helpers/*.bash via bats-core's
-        # native `load` — it uses NONE of the upstream helper libraries
-        # (bats-support/assert/detik/file). Each helper bats-action installs
-        # fires an internal actions/cache restore that fails with
-        # `tar … exit code 2` (it can't extract into the root-owned
-        # /usr/lib/bats-* paths), emitting one spurious "Failed to restore"
-        # warning per helper × 4 helpers × 15 amd64 cells = 60 per run — noise
-        # that buries real warnings. Disabling the four unused installs stops
-        # those caches ever being touched (not masking — the failing op no
-        # longer runs) and trims install time. bats-action 4.0.0 exposes no
-        # cache toggle; *-install:false is the only lever, and 4.0.0 is the
-        # newest tag (nothing to upgrade to). The bats binary itself still
-        # installs and its cache restores cleanly.
+        uses: https://github.com/bats-core/bats-action@4.0.0
+        # Our suite loads only our own tests/helpers/*.bash — none of the
+        # upstream helper libraries. Disabling the four unused installs
+        # avoids their cache-restore noise and trims install time.
         with:
           support-install: false
           assert-install: false
@@ -517,253 +442,97 @@ jobs:
 
       - name: Upload JUnit results
         if: always()
-        uses: Wandalen/wretry.action@v3.8.0
+        # v4: the newest artifact API generation Forgejo's artifact server
+        # is known to support; bump once your instance handles newer.
+        uses: https://github.com/actions/upload-artifact@v4
         with:
-          action: actions/upload-artifact@v7
-          attempt_limit: 3
-          attempt_delay: 10000
-          with: |
-            name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
-            path: tests/reports/*.xml
+          name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
+          path: tests/reports/*.xml
 
-      - name: Surface bats failures in PR / run summary
+      - name: Surface bats failures in run summary
         if: always()
-        uses: Wandalen/wretry.action@v3.8.0
+        # Forgejo's checks API compatibility is partial — worst case this
+        # step fails to post check-runs; don't let that fail the cell.
+        continue-on-error: true
+        uses: https://github.com/mikepenz/action-junit-report@v6
         with:
-          action: mikepenz/action-junit-report@v6
-          attempt_limit: 3
-          attempt_delay: 10000
-          with: |
-            report_paths: tests/reports/*.xml
-            check_name: bats / ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
-
-  # ─── arm64 smoke (native GH-hosted runner — no QEMU) ───
-  # Builds for arm64, loads locally, runs only the CST suite + a manual
-  # `nginx -t` / `php-fpm -t` / `notify_push --version` triplet. Full bats
-  # is amd64-only because arm64 native runner availability is rate-limited.
-  test-arm64-smoke:
-    name: Smoke (arm64) — ${{ matrix.build.major }}
-    needs: compute-matrix
-    if: needs.compute-matrix.outputs.builds != '[]'
-    runs-on: ubuntu-24.04-arm
-    strategy:
-      fail-fast: false
-      matrix:
-        build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
-    steps:
-      - name: Checkout (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: actions/checkout@v6
-          attempt_limit: 3
-          attempt_delay: 10000
-
-      - name: Point Docker Hub pulls at mirror.gcr.io (fallback)
-        # See the test job for rationale: host daemon mirror covers the buildkit
-        # boot image; buildkitd-mirror.toml covers buildkit base-image pulls. Both
-        # fall back to Docker Hub.
-        run: |
-          set -eux
-          sudo mkdir -p /etc/docker
-          existing=$(cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
-          echo "$existing" | jq '. + {"registry-mirrors":["https://mirror.gcr.io"]}' \
-            | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl restart docker
-          printf '[registry."docker.io"]\n  mirrors = ["mirror.gcr.io"]\n' > /tmp/buildkitd-mirror.toml
-
-      - name: Set up Buildx (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: docker/setup-buildx-action@v4
-          attempt_limit: 3
-          attempt_delay: 10000
-          # Boot the builder from a gcr.io image ref, NOT docker.io + the host
-          # daemon mirror: a daemon registry-mirror serves image *content* from
-          # the mirror but still probes registry-1.docker.io/v2/ for the auth
-          # handshake, and that probe times out during Docker Hub blips (PR #11 /
-          # run 27344118014 — one cell red on "Get registry-1.docker.io/v2/:
-          # context deadline exceeded" despite the mirror). A gcr.io image ref
-          # avoids docker.io entirely for boot. buildkitd-config additionally
-          # routes build-time base pulls (nextcloud:<ver>-fpm) through the mirror.
-          with: |
-            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
-            buildkitd-config: /tmp/buildkitd-mirror.toml
-
-      - name: Build arm64 image (load locally)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/arm64
-          load: true
-          # See amd64 step: force-pull the base + test the no-cache image the
-          # staleness gate will ship.
-          pull: true
-          no-cache: ${{ matrix.build.no_cache }}
-          tags: nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
-          build-args: |
-            NC_VERSION=${{ matrix.build.version }}
-          cache-from: type=gha,scope=nc-${{ matrix.build.major }}-arm64
-          cache-to: type=gha,scope=nc-${{ matrix.build.major }}-arm64,mode=max
-
-      - name: container-structure-test
-        env:
-          IMG: nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
-          CST_VERSION: v1.22.1
-        run: |
-          set -euo pipefail
-          curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors -o /usr/local/bin/container-structure-test \
-            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-arm64"
-          chmod +x /usr/local/bin/container-structure-test
-          container-structure-test test --image "$IMG" \
-            --config tests/cst/base.yaml \
-            --config tests/cst/nginx.yaml \
-            --config tests/cst/php.yaml \
-            --config tests/cst/notify_push.yaml
-
-      - name: Smoke (nginx -t, php-fpm -t, notify_push --version)
-        run: |
-          IMG=nextcloud-fpm-nginx:test-arm-${{ matrix.build.major }}
-          docker run --rm --entrypoint=nginx "$IMG" -t
-          docker run --rm --entrypoint=php-fpm "$IMG" -t
-          docker run --rm --entrypoint=/usr/local/bin/notify_push "$IMG" --version
+          report_paths: tests/reports/*.xml
+          check_name: bats / ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
 
   # ─── Single umbrella check for branch-protection rulesets ───
-  # The matrix-job names contain the NC major (e.g. "Test (amd64) — 33 / …"),
-  # so they change every time upstream cuts a new major and aren't usable as
-  # stable required-status-check contexts. `all-ci` is the stable gate: it has
-  # no name suffix, succeeds iff every dependency succeeded, and is the only
-  # check the ruleset needs to reference.
+  # The matrix-job names contain the NC major, so they change every time
+  # upstream cuts a new major and aren't usable as stable required-status
+  # contexts. `all-ci` is the stable gate.
   all-ci:
     name: all-ci
-    needs: [compute-matrix, test, test-arm64-smoke]
+    needs: [compute-matrix, test]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required jobs succeeded
         run: |
           set -euo pipefail
-          # `skipped` is acceptable on test/test-arm64-smoke: the compute-matrix
-          # gate may filter every major on a cron run when nothing upstream
-          # changed. compute-matrix itself must always succeed (it's the gate).
+          # `skipped` is acceptable on test: the compute-matrix gate may
+          # filter every major on a cron run. compute-matrix itself must
+          # always succeed (it's the gate).
           if [ "${{ needs.compute-matrix.result }}" != success ]; then
             echo "::error::compute-matrix=${{ needs.compute-matrix.result }}"
             exit 1
           fi
-          fail=0
-          for r in 'test=${{ needs.test.result }}' \
-                   'test-arm64-smoke=${{ needs.test-arm64-smoke.result }}'; do
-            val="${r#*=}"
-            case "$val" in
-              success|skipped) ;;
-              *) fail=1 ;;
-            esac
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::test=${{ needs.test.result }}, test-arm64-smoke=${{ needs.test-arm64-smoke.result }}"
-            exit 1
-          fi
+          case "${{ needs.test.result }}" in
+            success|skipped) ;;
+            *)
+              echo "::error::test=${{ needs.test.result }}"
+              exit 1
+              ;;
+          esac
 
-  # ─── Build + push multi-arch (only after tests pass) ───
-  # Reuses the buildx cache populated by the test jobs, so amd64+arm64 here
-  # is mostly cache hits — only the final manifest push + provenance attest
-  # is real work.
+  # ─── Build + push (only after tests pass) ───
+  # Reuses the registry buildx cache populated by the test jobs, so the
+  # build here is mostly cache hits — the manifest push is the real work.
   build:
     name: Build & push — v${{ matrix.build.version }}
-    # Skip pushes on PRs — dependabot PRs are untrusted with packages: write,
-    # and we don't want PR builds clobbering published tags. The push runs on
-    # the merge commit (push to master) instead. Also skip when the gate
-    # filtered every major (nothing to rebuild).
+    # Skip pushes on PRs — PR builds must not clobber published tags. The
+    # push runs on the merge commit (push to master) instead. Also skip
+    # when the gate filtered every major.
     if: github.event_name != 'pull_request' && needs.compute-matrix.outputs.builds != '[]'
-    needs: [compute-matrix, test, test-arm64-smoke]
+    needs: [compute-matrix, test]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
     steps:
-      - name: Checkout (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: actions/checkout@v6
-          attempt_limit: 3
-          attempt_delay: 10000
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v6
 
-      - name: Point Docker Hub pulls at mirror.gcr.io (fallback)
-        # See the test job for rationale: host daemon mirror covers the buildkit
-        # boot image + qemu's binfmt image; buildkitd-mirror.toml covers buildkit
-        # base-image pulls. Both fall back to Docker Hub.
-        run: |
-          set -eux
-          sudo mkdir -p /etc/docker
-          existing=$(cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
-          echo "$existing" | jq '. + {"registry-mirrors":["https://mirror.gcr.io"]}' \
-            | sudo tee /etc/docker/daemon.json >/dev/null
-          sudo systemctl restart docker
-          printf '[registry."docker.io"]\n  mirrors = ["mirror.gcr.io"]\n' > /tmp/buildkitd-mirror.toml
+      - name: Set up Buildx
+        uses: https://github.com/docker/setup-buildx-action@v4
 
-      # cache-image: false — the parallel build cells (one per in-window major)
-      # both try to save the binfmt image under the SAME fixed GHA cache
-      # key, so one loses the reservation race and logs a benign
-      # "Failed to save: Unable to reserve cache" warning every publish run.
-      # The action docker-pulls binfmt:latest regardless of caching (a cache
-      # hit is still followed by a `docker pull`), so disabling the cache only
-      # turns that manifest check into a small (~tens of MB) layer pull — a
-      # second or two per cell, on publish builds only — and frees the binfmt
-      # tarball from the repo's GHA cache budget. No functional change.
-      - name: Set up QEMU (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
+      - name: Log in to the Forgejo registry
+        uses: https://github.com/docker/login-action@v4
         with:
-          action: docker/setup-qemu-action@v4
-          attempt_limit: 3
-          attempt_delay: 10000
-          with: |
-            cache-image: false
-      - name: Set up Buildx (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: docker/setup-buildx-action@v4
-          attempt_limit: 3
-          attempt_delay: 10000
-          # Boot the builder from a gcr.io image ref, NOT docker.io + the host
-          # daemon mirror: a daemon registry-mirror serves image *content* from
-          # the mirror but still probes registry-1.docker.io/v2/ for the auth
-          # handshake, and that probe times out during Docker Hub blips (PR #11 /
-          # run 27344118014 — one cell red on "Get registry-1.docker.io/v2/:
-          # context deadline exceeded" despite the mirror). A gcr.io image ref
-          # avoids docker.io entirely for boot. buildkitd-config additionally
-          # routes build-time base pulls (nextcloud:<ver>-fpm) through the mirror.
-          with: |
-            driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
-            buildkitd-config: /tmp/buildkitd-mirror.toml
-
-      - name: Log in to ghcr.io (retry on transient failure)
-        uses: Wandalen/wretry.action@v3.8.0
-        with:
-          action: docker/login-action@v4
-          attempt_limit: 3
-          attempt_delay: 10000
-          with: |
-            registry: ghcr.io
-            username: ${{ github.actor }}
-            password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v6
+        uses: https://github.com/docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/nextcloud-fpm-nginx
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}
           tags: |
             type=raw,value=v${{ matrix.build.version }}
             type=raw,value=v${{ matrix.build.major }}.0
             type=raw,value=v${{ matrix.build.major }}
             type=raw,value=latest,enable=${{ matrix.build.major == needs.compute-matrix.outputs.latest }}
 
-      # Resolve the upstream FROM-image digest right before build, and bake it
-      # into the published image as `org.opencontainers.image.base.digest`.
+      # Resolve the upstream FROM-image digest right before build, and bake
+      # it into the published image as `org.opencontainers.image.base.digest`.
       # The compute-matrix gate reads this label on the next run to decide
-      # whether the base has drifted. `pull: true` on build-push-action below
-      # forces buildx to pull the latest manifest, so the digest captured here
-      # matches what the build actually uses (within a tiny race window — any
-      # repush in those seconds just causes one extra rebuild next run).
+      # whether the base has drifted. `pull: true` below forces buildx to
+      # pull the latest manifest, so the digest captured here matches what
+      # the build actually uses (within a tiny race window — any repush in
+      # those seconds just causes one extra rebuild next run).
       - id: base
         name: Resolve upstream base digest
         env:
@@ -777,20 +546,19 @@ jobs:
             | sudo tar -xz -C /usr/local/bin crane
           base_name="docker.io/library/nextcloud:${NC_VERSION}-fpm"
           base_digest=$(crane digest "$base_name")
-          echo "base_name=$base_name"     >> "$GITHUB_OUTPUT"
+          echo "base_name=$base_name" >> "$GITHUB_OUTPUT"
           echo "base_digest=$base_digest" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/build-push-action@v7
+      - uses: https://github.com/docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           pull: true
-          # no-cache=true skips ALL build cache. Set by the staleness branch of
-          # the compute-matrix gate (daily cron, image >=14d old) so apt
-          # re-resolves transitive deps (libssl, pcre, zlib, …) against the
-          # current Debian repos. Digest-drift rebuilds leave this false — the
-          # cache is naturally invalidated by the new parent layer anyway.
+          # no-cache=true skips ALL build cache. Set by the staleness branch
+          # of the compute-matrix gate so apt re-resolves transitive deps
+          # against current Debian repos. Digest-drift rebuilds leave this
+          # false — the cache is invalidated by the new parent layer anyway.
           no-cache: ${{ matrix.build.no_cache }}
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
@@ -799,12 +567,13 @@ jobs:
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.base.name=${{ steps.base.outputs.base_name }}
             org.opencontainers.image.base.digest=${{ steps.base.outputs.base_digest }}
-          provenance: true
-          sbom: true
-          # Read the per-arch caches the test jobs populated. No cache-to here:
-          # the test jobs already export to nc-<major>-{amd64,arm64} (the scopes
-          # the next run reads), so a merged nc-<major> export would never be
-          # consumed — just wasted upload time + GHA cache-quota eviction pressure.
+          # Attestation manifests (unknown/unknown platform entries) have a
+          # spotty history with Gitea/Forgejo registries — off until you've
+          # verified your instance handles them.
+          provenance: false
+          sbom: false
+          # Read the cache the test job populated. No cache-to here: the
+          # test job already exports mode=max to the same ref, so a second
+          # export would never be consumed.
           cache-from: |
-            type=gha,scope=nc-${{ matrix.build.major }}-amd64
-            type=gha,scope=nc-${{ matrix.build.major }}-arm64
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
