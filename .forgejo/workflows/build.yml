@@ -9,8 +9,12 @@
 #     the ephemeral GITHUB_TOKEN.
 #   * Removed all GitHub-VM plumbing: mirror.gcr.io daemon.json rewrites
 #     (impossible in a container job; put --registry-mirror on the dind
-#     daemon instead if wanted), free-disk-space, wretry retry wrappers,
-#     buildkit boot-image pin + buildkitd-mirror.toml.
+#     daemon instead — recommended, covers the compose fixture pulls of
+#     mariadb/postgres/redis too), free-disk-space, wretry retry wrappers,
+#     buildkit boot-image pin. The buildkitd docker.io mirror had to come
+#     BACK (as buildkitd-config-inline on setup-buildx-action): without it
+#     the 30-cell matrix resolves the nextcloud base from Docker Hub through
+#     one egress IP and trips the anonymous rate limit (429s).
 #   * arm64 dropped entirely (no ARM runner; QEMU builds not worth it) —
 #     test-arm64-smoke job deleted, publish is linux/amd64 only.
 #   * Buildx cache: type=gha -> type=registry on the Forgejo registry
@@ -374,6 +378,18 @@ jobs:
 
       - name: Set up Buildx
         uses: https://github.com/docker/setup-buildx-action@v4
+        with:
+          # Resolve docker.io refs via Google's pull-through mirror. All
+          # matrix cells share the runner's single egress IP, and 30 cells
+          # each doing a `pull: true` manifest resolution of the nextcloud
+          # base blows through Docker Hub's anonymous rate limit (429s,
+          # observed run 16 and earlier) within seconds. The GitHub original
+          # had the same protection via buildkitd-mirror.toml; this is the
+          # inline equivalent. buildkit falls back to docker.io on a mirror
+          # miss/outage, so this can only help.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       # Registry login needed here (not just in publish) because the buildx
       # cache now lives on the Forgejo registry (cache-to below).
@@ -509,6 +525,11 @@ jobs:
 
       - name: Set up Buildx
         uses: https://github.com/docker/setup-buildx-action@v4
+        with:
+          # Same Docker Hub mirror as the test job — see comment there.
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       - name: Log in to the Forgejo registry
         uses: https://github.com/docker/login-action@v4
@@ -546,7 +567,15 @@ jobs:
             "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin crane
           base_name="docker.io/library/nextcloud:${NC_VERSION}-fpm"
-          base_digest=$(crane digest "$base_name")
+          # Retry with backoff: a lone HEAD, but Docker Hub 429s linger for
+          # a while after a rate-limit window and would fail the publish.
+          base_digest=
+          for attempt in 1 2 3 4; do
+            base_digest=$(crane digest "$base_name" 2>/dev/null) && break
+            echo "crane digest $base_name failed (attempt $attempt) — retrying"
+            sleep $(( attempt * 15 ))
+          done
+          [ -n "$base_digest" ] || { echo "::error::could not resolve $base_name"; exit 1; }
           echo "base_name=$base_name" >> "$GITHUB_OUTPUT"
           echo "base_digest=$base_digest" >> "$GITHUB_OUTPUT"
 
