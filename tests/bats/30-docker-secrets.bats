@@ -22,6 +22,7 @@ teardown() {
 }
 
 @test "NEXTCLOUD_ADMIN_PASSWORD_FILE on fresh install (instead of plain env)" {
+    [ "${REMOTE_DOCKER:-}" = "1" ] && skip "bind-mount from job workspace not visible to remote docker daemon (dind)"
     docker run -d --name "$CTN" \
         -e SQLITE_DATABASE=nc.db \
         -e NEXTCLOUD_ADMIN_USER=admin \
@@ -38,6 +39,7 @@ teardown() {
 }
 
 @test "secret value NOT present in PID 1 /proc/*/environ" {
+    [ "${REMOTE_DOCKER:-}" = "1" ] && skip "bind-mount from job workspace not visible to remote docker daemon (dind)"
     docker run -d --name "$CTN" \
         -e SQLITE_DATABASE=nc.db \
         -e NEXTCLOUD_ADMIN_USER=admin \
