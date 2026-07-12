@@ -421,10 +421,8 @@ jobs:
 
       - name: Install bats-core
         uses: https://github.com/bats-core/bats-action@4.0.0
-        # Our suite loads only our own tests/helpers/*.bash — none of the
-        # upstream helper libraries. Disabling the four unused installs
-        # avoids their cache-restore noise and trims install time.
         with:
+          bats-version: "1.12.0"
           support-install: false
           assert-install: false
           detik-install: false
