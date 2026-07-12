@@ -27,6 +27,7 @@ teardown() {
 }
 
 @test "synthetic v31 version.php in /var/www/html causes current-major boot to refuse" {
+    [ "${REMOTE_DOCKER:-}" = "1" ] && skip "bind-mount from job workspace not visible to remote docker daemon (dind)"
     # Create an empty volume, populate it with a v31 version.php at the root,
     # then try to boot. NC has to think v31 is installed but the image is much newer.
     docker volume create "$VOL" >/dev/null
