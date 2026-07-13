@@ -38,8 +38,10 @@ env:
   # Source is derived at runtime from GITHUB_SERVER_URL + GITHUB_REPOSITORY
   # (lowercased — registry paths are), so instance/user/repo renames need no
   # edit here. Only the ghcr.io destination is fixed: it lives on a
-  # different platform and can't be derived from this run's context.
-  DST_IMAGE: ghcr.io/v3djg6gl/nextcloud-fpm-nginx-mirror
+  # different platform and can't be derived from this run's context. It
+  # targets the LEGACY public package (GitHub-era CI history, v32+) so the
+  # tags keep flowing where existing consumers already pull from.
+  DST_IMAGE: ghcr.io/v3djg6gl/nextcloud-fpm-nginx
 
 jobs:
   mirror:
