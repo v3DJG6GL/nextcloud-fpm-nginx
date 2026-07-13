@@ -88,9 +88,19 @@ jobs:
               --username "$SRC_USER" --password-stdin
           fi
 
-          copied=0 fresh=0
+          # List first, fail loudly: `for tag in $(...)` swallows the
+          # substitution's exit code — a stale REGISTRY_TOKEN once turned an
+          # UNAUTHORIZED listing into a green "0 copied" run (run 47).
+          all_tags=$(crane ls "$SRC_IMAGE")
           # Runnable tags only: vN, vN.N, vN.N.N, latest — not buildcache-*.
-          for tag in $(crane ls "$SRC_IMAGE" | grep -E '^(v[0-9]+(\.[0-9]+){0,2}|latest)$' | sort -V); do
+          tags=$(printf '%s\n' "$all_tags" | grep -E '^(v[0-9]+(\.[0-9]+){0,2}|latest)$' | sort -V || true)
+          if [ -z "$tags" ]; then
+            echo "::error::no runnable tags found on $SRC_IMAGE"
+            exit 1
+          fi
+
+          copied=0 fresh=0
+          for tag in $tags; do
             src_digest=$(crane digest "$SRC_IMAGE:$tag")
             dst_digest=$(crane digest "$DST_IMAGE:$tag" 2>/dev/null || true)
             if [ "$src_digest" = "$dst_digest" ]; then
