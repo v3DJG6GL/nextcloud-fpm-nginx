@@ -35,7 +35,10 @@ on:
   workflow_dispatch:
 
 env:
-  SRC_IMAGE: forgejo.informethic.ch/v3djg6gl/nextcloud-fpm-nginx
+  # Source is derived at runtime from GITHUB_SERVER_URL + GITHUB_REPOSITORY
+  # (lowercased — registry paths are), so instance/user/repo renames need no
+  # edit here. Only the ghcr.io destination is fixed: it lives on a
+  # different platform and can't be derived from this run's context.
   DST_IMAGE: ghcr.io/v3djg6gl/nextcloud-fpm-nginx-mirror
 
 jobs:
@@ -67,6 +70,9 @@ jobs:
           SRC_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
+
+          SRC_IMAGE="${GITHUB_SERVER_URL#*://}/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "Syncing $SRC_IMAGE -> $DST_IMAGE"
 
           if [ -z "$GHCR_TOKEN" ] || [ -z "$GHCR_USER" ]; then
             echo "::notice::GHCR_USER/GHCR_TOKEN secrets not configured — skipping mirror (add a GitHub PAT with write:packages to enable)"
