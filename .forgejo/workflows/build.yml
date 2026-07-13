@@ -96,11 +96,15 @@ concurrency:
 
 env:
   # REGISTRY (the registry host = this instance) is derived per-job from
-  # GITHUB_SERVER_URL by a "Derive registry host" step — expressions can't
-  # strip the scheme, so it goes through GITHUB_ENV. Owner comes from
-  # github.repository_owner everywhere. Only the image name is fixed: it's
-  # decoupled from the repo name on purpose (a repo rename must not
-  # silently re-path published images).
+  # GITHUB_SERVER_URL by a "Derive registry refs" step — expressions can't
+  # strip the scheme or lowercase, so both go through GITHUB_ENV. OWNER_LC
+  # is the lowercased owner: registry repo paths must be lowercase, and a
+  # mixed-case profile name in a raw cache-to ref fails the exporter cells
+  # ("repository name must be lowercase" — observed 2026-07-13 when the
+  # profile was briefly v3DJG6GL; cache-from errors only degrade to
+  # warnings, metadata-action lowercases by itself). Only the image name
+  # is fixed: it's decoupled from the repo name on purpose (a repo rename
+  # must not silently re-path published images).
   IMAGE: nextcloud-fpm-nginx
 
 jobs:
@@ -111,8 +115,10 @@ jobs:
       builds: ${{ steps.set.outputs.builds }}
       latest: ${{ steps.set.outputs.latest }}
     steps:
-      - name: Derive registry host
-        run: echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+      - name: Derive registry refs (host + lowercase owner)
+        run: |
+          echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+          echo "OWNER_LC=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -414,9 +420,11 @@ jobs:
         # runner's `capacity` — consider trimming the scenario list for
         # push/PR events if wall-clock time becomes a problem.
     steps:
-      - name: Derive registry host
+      - name: Derive registry refs (host + lowercase owner)
         if: matrix.build.version != 'none'
-        run: echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+        run: |
+          echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+          echo "OWNER_LC=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
       - name: Checkout
         if: matrix.build.version != 'none'
@@ -474,14 +482,14 @@ jobs:
           tags: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
           build-args: |
             NC_VERSION=${{ matrix.build.version }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
           # Exactly ONE cell per major exports the cache (every cell imports).
           # All 15 scenario cells build the identical image, and 15 concurrent
           # cache pushes to the same tag race in Forgejo's package DB — the
           # registry 500s on concurrent manifest PUTs of one tag, failing the
           # whole build step. ignore-error tolerates a transient 500 on the
           # one export too: worst case the cache is one run stale (fail-open).
-          cache-to: ${{ matrix.scenario.id == 'sqlite-noredis-cron-none' && format('type=registry,ref={0}/{1}/{2}:buildcache-{3},mode=max,ignore-error=true', env.REGISTRY, github.repository_owner, env.IMAGE, matrix.build.major) || '' }}
+          cache-to: ${{ matrix.scenario.id == 'sqlite-noredis-cron-none' && format('type=registry,ref={0}/{1}/{2}:buildcache-{3},mode=max,ignore-error=true', env.REGISTRY, env.OWNER_LC, env.IMAGE, matrix.build.major) || '' }}
 
       - name: container-structure-test (image-static assertions)
         if: matrix.build.version != 'none'
@@ -596,9 +604,11 @@ jobs:
       matrix:
         build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
     steps:
-      - name: Derive registry host
+      - name: Derive registry refs (host + lowercase owner)
         if: matrix.build.version != 'none'
-        run: echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+        run: |
+          echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+          echo "OWNER_LC=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
       - name: Checkout
         if: matrix.build.version != 'none'
@@ -625,7 +635,7 @@ jobs:
         if: matrix.build.version != 'none'
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}
+          images: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}
           tags: |
             type=raw,value=v${{ matrix.build.version }}
             type=raw,value=v${{ matrix.build.major }}.0
@@ -694,4 +704,4 @@ jobs:
           # test job already exports mode=max to the same ref, so a second
           # export would never be consumed.
           cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
