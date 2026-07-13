@@ -44,7 +44,7 @@ SCENARIO_DB=sqlite SCENARIO_REDIS=false SCENARIO_NOTIFY_PUSH=false \
 SCENARIO_CRON=none ./tests/run-all.sh
 
 # Use a specific image tag (defaults to local/nc-fpm-nginx:test)
-NC_IMAGE=forgejo.informethic.ch/martin-zeller/nextcloud-fpm-nginx:v34 ./tests/run-all.sh
+NC_IMAGE=forgejo.informethic.ch/v3djg6gl/nextcloud-fpm-nginx:v34 ./tests/run-all.sh
 ```
 
 ## Scenario matrix

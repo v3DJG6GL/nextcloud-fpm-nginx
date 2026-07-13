@@ -16,7 +16,7 @@ official [`nextcloud:<version>-fpm`](https://hub.docker.com/_/nextcloud) image.
 ## Image tags
 
 Replace `<REGISTRY>/<OWNER>` with the registry host and user/org that own
-this build (here: `forgejo.informethic.ch/martin-zeller`).
+this build (here: `forgejo.informethic.ch/v3djg6gl`).
 
 | Tag | What it tracks | Use this when… |
 |---|---|---|

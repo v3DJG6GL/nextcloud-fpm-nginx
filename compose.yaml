@@ -23,7 +23,7 @@ services:
     networks: [backend]
 
   app: &app
-    image: forgejo.informethic.ch/martin-zeller/nextcloud-fpm-nginx:v34
+    image: forgejo.informethic.ch/v3djg6gl/nextcloud-fpm-nginx:v34
     restart: unless-stopped
     depends_on: [db, redis]
     environment:

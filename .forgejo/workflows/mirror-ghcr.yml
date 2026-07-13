@@ -35,7 +35,7 @@ on:
   workflow_dispatch:
 
 env:
-  SRC_IMAGE: forgejo.informethic.ch/martin-zeller/nextcloud-fpm-nginx
+  SRC_IMAGE: forgejo.informethic.ch/v3djg6gl/nextcloud-fpm-nginx
   DST_IMAGE: ghcr.io/v3djg6gl/nextcloud-fpm-nginx-mirror
 
 jobs:
