@@ -503,11 +503,23 @@ jobs:
           curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors -o /usr/local/bin/container-structure-test \
             "${GITHUB_SERVER_URL}/api/packages/tools/generic/container-structure-test/${CST_VERSION}/container-structure-test-linux-amd64"
           chmod +x /usr/local/bin/container-structure-test
-          container-structure-test test --image "$IMG" \
-            --config tests/cst/base.yaml \
-            --config tests/cst/nginx.yaml \
-            --config tests/cst/php.yaml \
-            --config tests/cst/notify_push.yaml
+          # Retry: when two matrix runs overlap on the shared dind daemon,
+          # container creation can throw transient 500s ("could not set
+          # link up for host interface vethXXX: resource temporarily
+          # unavailable" — observed 2026-07-13, PR run × master run).
+          # Genuine assertion failures are deterministic and fail every
+          # attempt, so this only papers over infra hiccups.
+          for attempt in 1 2 3; do
+            container-structure-test test --image "$IMG" \
+              --config tests/cst/base.yaml \
+              --config tests/cst/nginx.yaml \
+              --config tests/cst/php.yaml \
+              --config tests/cst/notify_push.yaml && exit 0
+            echo "CST attempt $attempt failed — retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "::error::container-structure-test failed on all 3 attempts"
+          exit 1
 
       - name: Install bats-core
         if: matrix.build.version != 'none'
