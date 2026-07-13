@@ -121,7 +121,7 @@ jobs:
           echo "OWNER_LC=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install crane
         env:
@@ -428,7 +428,7 @@ jobs:
 
       - name: Checkout
         if: matrix.build.version != 'none'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # tests/bats/28-config-drift.bats runs `php -l` on the job host to
       # syntax-check a fixture. The catthehacker act image has no PHP.
@@ -554,7 +554,7 @@ jobs:
         # Deliberately the ONE instance-qualified ref left: `uses:` takes no
         # expressions, and unqualifying it would break Renovate's version
         # lookup (github.com/forgejo/upload-artifact doesn't exist).
-        uses: https://forgejo.informethic.ch/forgejo/upload-artifact@v4
+        uses: https://forgejo.informethic.ch/forgejo/upload-artifact@v5
         with:
           name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
           path: tests/reports/*.xml
@@ -624,7 +624,7 @@ jobs:
 
       - name: Checkout
         if: matrix.build.version != 'none'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Buildx
         if: matrix.build.version != 'none'
