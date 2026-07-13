@@ -8,9 +8,13 @@
 #
 # Deliberately a SEPARATE workflow, not a job in build.yml: a `needs:` on
 # the build job would re-trigger the skipped-needs deadlock on PR runs
-# (see build.yml header). A digest-compare reconcile is idempotent, so
-# running it on a timer (shortly after build.yml's crons) is just as good
-# as running it after publish — anything missed lands next slot.
+# (see build.yml header). Primary trigger is registry_package instead:
+# Forgejo fires it once per package VERSION published — i.e. once per tag
+# build.yml pushes, so one publish arrives as a burst of events. The
+# concurrency group collapses the burst: one sync runs, the newest
+# surplus event waits as pending, the rest dedupe away. The crons stay
+# as a reconcile backstop — the digest-compare is idempotent, so
+# anything an event run missed lands next slot.
 #
 # Setup (job no-ops with a notice until this is done):
 #   * Create a GitHub PAT (classic) with `write:packages` scope.
@@ -26,13 +30,21 @@
 name: mirror-ghcr
 
 on:
+  registry_package:
+    types: [published]
   schedule:
-    # One hour after build.yml's crons (06:00/14:00 UTC), so freshly
-    # published images sync the same slot. Forgejo evaluates cron in UTC:
-    # 07:00/15:00 UTC = 09:00/17:00 CEST.
+    # Reconcile backstop, one hour after build.yml's crons (06:00/14:00
+    # UTC), so images sync the same slot even if the event runs missed
+    # them. Forgejo evaluates cron in UTC: 07:00/15:00 UTC = 09:00/17:00
+    # CEST.
     - cron: '0 7 * * *'
     - cron: '0 15 * * *'
   workflow_dispatch:
+
+# Collapse the per-tag event burst of a publish — see header.
+concurrency:
+  group: mirror-ghcr
+  cancel-in-progress: false
 
 env:
   # Source is derived at runtime from GITHUB_SERVER_URL + GITHUB_REPOSITORY
