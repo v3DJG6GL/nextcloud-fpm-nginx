@@ -1,0 +1,96 @@
+# .forgejo/workflows/mirror-ghcr.yml
+#
+# Reconciling one-way sync of published container images from this
+# instance's registry to ghcr.io (companion to the git mirror at
+# github.com/v3DJG6GL/nextcloud-fpm-nginx-mirror). `crane cp` copies
+# manifests + layers bit-identical — same digests as the Forgejo registry,
+# no rebuild — so the Forgejo registry stays the single source of truth.
+#
+# Deliberately a SEPARATE workflow, not a job in build.yml: a `needs:` on
+# the build job would re-trigger the skipped-needs deadlock on PR runs
+# (see build.yml header). A digest-compare reconcile is idempotent, so
+# running it on a timer (shortly after build.yml's crons) is just as good
+# as running it after publish — anything missed lands next slot.
+#
+# Setup (job no-ops with a notice until this is done):
+#   * Create a GitHub PAT (classic) with `write:packages` scope.
+#   * Add repo secrets GHCR_USER (GitHub username) + GHCR_TOKEN (the PAT).
+#   * First successful run creates the GHCR package PRIVATE — flip it to
+#     public in the package settings on github.com and (optionally) link
+#     it to the mirror repo there. GHCR won't auto-link: the images'
+#     org.opencontainers.image.source label points at this instance.
+#
+# buildcache-* tags are excluded on purpose (buildx cache blobs, not
+# runnable images, and they churn every run).
+
+name: mirror-ghcr
+
+on:
+  schedule:
+    # One hour after build.yml's crons (06:00/14:00 UTC), so freshly
+    # published images sync the same slot. Forgejo evaluates cron in UTC:
+    # 07:00/15:00 UTC = 09:00/17:00 CEST.
+    - cron: '0 7 * * *'
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+
+env:
+  SRC_IMAGE: forgejo.informethic.ch/martin-zeller/nextcloud-fpm-nginx
+  DST_IMAGE: ghcr.io/v3djg6gl/nextcloud-fpm-nginx-mirror
+
+jobs:
+  mirror:
+    name: Sync image tags to ghcr.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install crane
+        env:
+          # renovate: datasource=github-releases depName=google/go-containerregistry
+          # Fetched from this instance's `tools` generic package registry —
+          # upload the new release tarball there BEFORE bumping this version.
+          CRANE_VERSION: v0.21.7
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors \
+            "${GITHUB_SERVER_URL}/api/packages/tools/generic/go-containerregistry/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      - name: Sync tags (digest-compare, copy only what drifted)
+        env:
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          # Source registry read: anonymous works while the package is
+          # public; log in with the existing CI credentials anyway so the
+          # sync survives the package ever being flipped private.
+          SRC_USER: ${{ secrets.REGISTRY_USER }}
+          SRC_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GHCR_TOKEN" ] || [ -z "$GHCR_USER" ]; then
+            echo "::notice::GHCR_USER/GHCR_TOKEN secrets not configured — skipping mirror (add a GitHub PAT with write:packages to enable)"
+            exit 0
+          fi
+
+          echo "$GHCR_TOKEN" | crane auth login ghcr.io \
+            --username "$GHCR_USER" --password-stdin
+          if [ -n "$SRC_TOKEN" ]; then
+            echo "$SRC_TOKEN" | crane auth login "${SRC_IMAGE%%/*}" \
+              --username "$SRC_USER" --password-stdin
+          fi
+
+          copied=0 fresh=0
+          # Runnable tags only: vN, vN.N, vN.N.N, latest — not buildcache-*.
+          for tag in $(crane ls "$SRC_IMAGE" | grep -E '^(v[0-9]+(\.[0-9]+){0,2}|latest)$' | sort -V); do
+            src_digest=$(crane digest "$SRC_IMAGE:$tag")
+            dst_digest=$(crane digest "$DST_IMAGE:$tag" 2>/dev/null || true)
+            if [ "$src_digest" = "$dst_digest" ]; then
+              fresh=$((fresh + 1))
+              continue
+            fi
+            echo "[$tag] ${dst_digest:-<absent>} -> $src_digest"
+            crane cp "$SRC_IMAGE:$tag" "$DST_IMAGE:$tag"
+            copied=$((copied + 1))
+          done
+          echo "::notice::mirror-ghcr: $copied tag(s) copied, $fresh already in sync"
