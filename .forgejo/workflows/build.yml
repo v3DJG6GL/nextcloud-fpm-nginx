@@ -450,6 +450,15 @@ jobs:
           # had the same protection via buildkitd-mirror.toml; this is the
           # inline equivalent. buildkit falls back to docker.io on a mirror
           # miss/outage, so this can only help.
+          #
+          # network=host puts the builder in the dind daemon's netns (same as
+          # the job containers, per runner-config container.network). Without
+          # it the builder sits on a dind bridge whose DNS falls back to
+          # 8.8.8.8, resolves the instance's public WAN IP, and hairpins all
+          # registry traffic (cache-from/push) through the LAN firewall. In
+          # the dind netns it resolves via the outer embedded DNS, which
+          # answers with the reverse proxy's container alias directly.
+          driver-opts: network=host
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
@@ -630,7 +639,9 @@ jobs:
         if: matrix.build.version != 'none'
         uses: docker/setup-buildx-action@v4
         with:
-          # Same Docker Hub mirror as the test job — see comment there.
+          # Same Docker Hub mirror and network=host rationale as the test
+          # job — see comments there.
+          driver-opts: network=host
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
