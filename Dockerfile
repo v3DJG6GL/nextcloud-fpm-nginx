@@ -52,11 +52,30 @@ RUN set -eux; \
     ln -sf /dev/stderr /var/log/nginx/error.log; \
     mkdir -p /etc/supervisor/conf.d /etc/nginx/conf.d /etc/nginx/snippets /var/log/supervisor
 
-# nginx.conf `include`s nc-hsts.conf by literal path; render-overrides.sh
-# (re)creates it at boot, but `nginx -t` also lints the static image (CST)
-# BEFORE the entrypoint runs, and a missing include is a fatal emerg. Ship an
-# empty stub so the un-booted image passes nginx -t.
-RUN : > /etc/nginx/snippets/nc-hsts.conf
+# nginx.conf `include`s nc-hsts.conf and nc-access-log.conf by literal path;
+# render-overrides.sh (re)creates both at boot, but `nginx -t` also lints the
+# static image (CST) BEFORE the entrypoint runs, and a missing include is a
+# fatal emerg. Ship stubs so the un-booted image passes nginx -t. The access
+# log stub carries the boot-time default (off) so the static image and the
+# booted-without-NGINX_ACCESS_LOG container agree.
+RUN : > /etc/nginx/snippets/nc-hsts.conf \
+ && echo 'access_log off;' > /etc/nginx/snippets/nc-access-log.conf
+
+# Drop the upstream php-fpm per-request access log. The `php:*-fpm` base sets
+# `access.log = /proc/self/fd/2` in docker.conf, so every request nginx hands
+# to FPM is logged TWICE on `docker logs` (nginx on stdout + FPM on stderr),
+# and the FPM line carries strictly less information. The line must be
+# DELETED, not overridden: php-fpm treats `access.log =` (empty) as a path and
+# aborts at startup with "failed to open access log (): No such file or
+# directory" (verified against nextcloud:33-fpm). Re-enable at runtime with
+# FPM_ACCESS_LOG=/proc/self/fd/2 (rendered into zz-env.conf, which loads
+# after docker.conf). The grep guard fails the build if upstream moves the
+# directive, so a silent return of the duplicate lines can't slip through.
+RUN set -eux; \
+    f=/usr/local/etc/php-fpm.d/docker.conf; \
+    grep -qE '^\s*access\.log\s*=' "$f"; \
+    sed -i -E '/^\s*access\.log\s*=/d' "$f"; \
+    ! grep -qE '^\s*access\.log\s*=' /usr/local/etc/php-fpm.d/*.conf
 
 # Install the Nextcloud notify_push binary (companion to the upstream
 # `notify_push` PHP app that ships in the official image). Disabled by default;

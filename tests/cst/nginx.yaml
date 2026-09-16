@@ -59,6 +59,24 @@ commandTests:
     exitCode: 0
     excludedOutput: ['^0$']
 
+  - name: nginx.conf includes the access-log snippet (no hardcoded access_log at http scope)
+    command: sh
+    args:
+      - '-c'
+      - |
+        grep -qE '^\s*include /etc/nginx/snippets/nc-access-log\.conf;' /etc/nginx/nginx.conf || { echo "include missing"; exit 1; }
+        # The only access_log lines left in nginx.conf are the per-location `off`s.
+        if grep -nE '^\s*access_log ' /etc/nginx/nginx.conf | grep -v 'access_log off;'; then
+            echo "hardcoded access_log target in nginx.conf"; exit 1
+        fi
+    exitCode: 0
+
+  - name: access-log snippet shipped with the default (off) so the static image passes nginx -t
+    command: cat
+    args: ['/etc/nginx/snippets/nc-access-log.conf']
+    exitCode: 0
+    expectedOutput: ['^access_log off;']
+
   - name: mime.types declares application/wasm
     command: grep
     args: ['application/wasm', '/etc/nginx/mime.types']

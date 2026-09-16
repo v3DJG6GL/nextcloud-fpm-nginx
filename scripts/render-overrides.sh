@@ -4,6 +4,7 @@
 #   /usr/local/etc/php/conf.d/zz-env-overrides.ini  (PHP_*)
 #   /usr/local/etc/php-fpm.d/zz-env.conf            (FPM_*)
 #   /etc/nginx/snippets/nc-hsts.conf                (NGINX_HSTS)
+#   /etc/nginx/snippets/nc-access-log.conf          (NGINX_ACCESS_LOG)
 # The `zz-` prefix on the PHP ini ensures it loads AFTER the upstream image's
 # `opcache-recommended.ini` and `nextcloud.ini` (lexical order).
 # Plus in-place patches `server_name` in /etc/nginx/nginx.conf from
@@ -23,6 +24,7 @@ set -eu
 php_ini=/usr/local/etc/php/conf.d/zz-env-overrides.ini
 fpm_conf=/usr/local/etc/php-fpm.d/zz-env.conf
 hsts_snippet=/etc/nginx/snippets/nc-hsts.conf
+access_log_snippet=/etc/nginx/snippets/nc-access-log.conf
 
 : > "$php_ini"
 : > "$fpm_conf"
@@ -132,6 +134,11 @@ emit_fpm "pm.max_requests"             FPM_PM_MAX_REQUESTS
 emit_fpm "request_terminate_timeout"   FPM_REQUEST_TERMINATE_TIMEOUT
 emit_fpm "request_slowlog_timeout"     FPM_REQUEST_SLOWLOG_TIMEOUT
 emit_fpm "slowlog"                     FPM_SLOWLOG
+# The Dockerfile strips upstream's `access.log = /proc/self/fd/2` (duplicate of
+# the nginx access log). Setting FPM_ACCESS_LOG=/proc/self/fd/2 restores it.
+# Never emit an empty value: php-fpm treats `access.log =` as a path and
+# refuses to start — prepare_val's empty-skip is what keeps that impossible.
+emit_fpm "access.log"                  FPM_ACCESS_LOG
 
 # --- Nginx overrides ---------------------------------------------------------
 
@@ -194,6 +201,20 @@ case "$hsts_val" in
         ;;
     ?*)
         printf 'add_header Strict-Transport-Security "%s" always;\n' "$hsts_val" > "$hsts_snippet"
+        ;;
+esac
+
+# Per-request nginx access log. Off by default: a syncing desktop/mobile client
+# or a WebDAV backup issues thousands of PROPFINDs a minute, and each one became
+# a `docker logs` line (plus disk in the json-file driver). error_log stays at
+# `warn` on stderr regardless, so failures are always visible. The snippet is
+# always rewritten (nginx.conf includes it by literal path at http scope).
+case "${NGINX_ACCESS_LOG:-false}" in
+    true|1|yes|on)
+        echo 'access_log /dev/stdout main;' > "$access_log_snippet"
+        ;;
+    *)
+        echo 'access_log off;' > "$access_log_snippet"
         ;;
 esac
 

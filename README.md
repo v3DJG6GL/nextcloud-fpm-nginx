@@ -149,6 +149,7 @@ production deployments will want to bump at least `FPM_PM_MAX_CHILDREN`:
 | `FPM_REQUEST_TERMINATE_TIMEOUT` | `request_terminate_timeout` (0 = no limit) | `0s` |
 | `FPM_REQUEST_SLOWLOG_TIMEOUT` | `request_slowlog_timeout` (0 = disabled) | `0s` |
 | `FPM_SLOWLOG` | `slowlog` (path; required if `FPM_REQUEST_SLOWLOG_TIMEOUT > 0`) | unset |
+| `FPM_ACCESS_LOG` | `access.log` (path; `/proc/self/fd/2` = container stderr). The upstream image's default of `/proc/self/fd/2` is **removed** by this image because it duplicated every nginx access-log line. | unset (disabled) |
 
 Nginx tweaks:
 
@@ -156,6 +157,21 @@ Nginx tweaks:
 |---|---|---|
 | `NGINX_SERVER_NAME` | Replaces `server_name` in the server block | `_` (catch-all) |
 | `NGINX_HSTS` | Value of `Strict-Transport-Security` header (emitted only when set) | unset |
+| `NGINX_ACCESS_LOG` | If truthy (`true`/`1`/`yes`/`on`), logs one line per request to stdout (`docker logs`). Off = only nginx warnings/errors (`error_log … warn`) are logged. | `false` |
+
+**Logging.** The Nextcloud admin-UI log level only governs Nextcloud's own
+`data/nextcloud.log`. What shows up in `docker logs` is the web-server layer:
+nginx's error log (always, at `warn`) and, only when `NGINX_ACCESS_LOG` is
+truthy, one line per HTTP request. A syncing client or WebDAV backup issues
+thousands of `PROPFIND`s a minute, so the per-request log is off by default;
+turn it on when you need an audit trail or are debugging a client. Whichever
+you pick, cap the Docker log on disk:
+
+```yaml
+logging:
+  driver: json-file
+  options: { max-size: "50m", max-file: "3" }
+```
 
 Optional services:
 
@@ -245,6 +261,7 @@ order is overriding it — check for other `.conf` files in
 docker exec nc id www-data                                 # PUID/PGID actually applied
 docker exec nc grep -E '^\s*server_name' /etc/nginx/nginx.conf   # NGINX_SERVER_NAME
 docker exec nc cat /etc/nginx/snippets/nc-hsts.conf             # NGINX_HSTS
+docker exec nc cat /etc/nginx/snippets/nc-access-log.conf       # NGINX_ACCESS_LOG
 docker exec nc supervisorctl status                              # NOTIFY_PUSH_ENABLE / NEXTCLOUD_CRON_ENABLE
 docker logs nc 2>&1 | grep -E 'entrypoint:'                      # PUID/PGID reassign banner
 ```

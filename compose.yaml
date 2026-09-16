@@ -57,10 +57,17 @@ services:
       FPM_PM_MAX_CHILDREN: 25
       FPM_PM_MAX_REQUESTS: 500
       FPM_REQUEST_TERMINATE_TIMEOUT: 300
+      # php-fpm's own per-request access log is stripped from the image (it
+      # duplicated the nginx one). Restore it if you really want both:
+      # FPM_ACCESS_LOG: /proc/self/fd/2
 
       # Pin the nginx host (defaults to catch-all `_`).
       NGINX_SERVER_NAME: cloud.example.com
       # NGINX_HSTS: "max-age=31536000; includeSubDomains"
+      # Per-request nginx access log on `docker logs` (one line per request,
+      # incl. every WebDAV PROPFIND). "false" (the default) logs only nginx
+      # warnings and errors. Set "true" for an audit trail or to debug client sync.
+      NGINX_ACCESS_LOG: "false"
 
       # Enable the notify_push companion daemon (real-time sync for desktop/
       # mobile clients via WebSocket). Requires REDIS_HOST and a non-SQLite

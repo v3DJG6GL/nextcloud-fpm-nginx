@@ -25,6 +25,16 @@ load '../helpers/compose.bash'
     assert_status_zero "$status"
 }
 
+@test "FPM_ACCESS_LOG -> 'access.log = /proc/self/fd/2' in zz-env.conf (opt-in restore)" {
+    run compose_exec grep -E '^access\.log = /proc/self/fd/2$' /usr/local/etc/php-fpm.d/zz-env.conf
+    assert_status_zero "$status"
+}
+
+@test "upstream docker.conf no longer sets access.log (image strips the duplicate request log)" {
+    run compose_exec grep -E '^\s*access\.log\s*=' /usr/local/etc/php-fpm.d/docker.conf
+    assert_status_nonzero "$status"
+}
+
 @test "php-fpm config still validates with zz-env.conf merged" {
     run compose_exec php-fpm -t
     assert_status_zero "$status"
@@ -66,6 +76,7 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     FPM_REQUEST_SLOWLOG_TIMEOUT="   " \
     FPM_PM_MAX_REQUESTS='""' \
     FPM_REQUEST_TERMINATE_TIMEOUT='"' \
+    FPM_ACCESS_LOG='' \
     "$sb/render.sh" 2>&1
 echo "--- zz-env.conf ---"
 cat "$sb/fpm/zz-env.conf"
@@ -97,6 +108,9 @@ SH
     assert_not_match "$output" "^pm\.max_requests ="
     # the unbalanced lone-quote value must NOT appear (would be unterminated)
     assert_not_match "$output" "^request_terminate_timeout ="
+    # FPM_ACCESS_LOG='' must be skipped, not rendered as `access.log =` — an
+    # empty access.log path is fatal to php-fpm ("failed to open access log ()")
+    assert_not_match "$output" "^access\.log ="
     # and php-fpm must accept the resulting config
     assert_match "$output" "test is successful"
 }

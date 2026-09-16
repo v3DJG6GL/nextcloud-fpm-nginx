@@ -29,6 +29,8 @@ load '../helpers/http.bash'
 @test "X-Forwarded-For from trusted subnet rewrites remote_addr" {
     # Probe an endpoint that echoes back the seen client IP via the access log.
     # We trigger one request with a spoofed XFF and one without, then read the log.
+    # Relies on NGINX_ACCESS_LOG=true in tests/compose/*.yaml — the per-request
+    # access log is OFF by default in this image.
     nc_curl GET / -H 'X-Forwarded-For: 198.51.100.42' >/dev/null 2>&1 || true
     sleep 1
     run compose logs --tail=20 nc

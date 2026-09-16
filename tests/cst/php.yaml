@@ -64,3 +64,16 @@ commandTests:
     args: ['-r', 'echo ini_get("session.serialize_handler");']
     exitCode: 0
     expectedOutput: ['igbinary']
+
+  - name: upstream php-fpm access.log stripped from every pool file (no duplicate request log)
+    command: sh
+    args:
+      - '-c'
+      - |
+        # Dockerfile deletes `access.log = /proc/self/fd/2` from docker.conf. If
+        # any shipped pool file still sets it, every request is logged twice
+        # (nginx stdout + FPM stderr). Commented `;access.log` in www.conf is fine.
+        if grep -nE '^\s*access\.log\s*=' /usr/local/etc/php-fpm.d/*.conf; then
+            echo "access.log still set in a shipped pool file"; exit 1
+        fi
+    exitCode: 0

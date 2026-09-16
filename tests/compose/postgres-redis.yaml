@@ -57,6 +57,8 @@ services:
       FPM_REQUEST_TERMINATE_TIMEOUT: 300
       NGINX_SERVER_NAME: test.local
       NGINX_HSTS: "max-age=31536000; includeSubDomains"
+      NGINX_ACCESS_LOG: "true"
+      FPM_ACCESS_LOG: /proc/self/fd/2
     ports:
       - '0:80'    # ephemeral host port; tests resolve via `docker compose port nc 80`
     healthcheck:
