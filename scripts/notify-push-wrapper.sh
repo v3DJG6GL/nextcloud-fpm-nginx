@@ -45,9 +45,21 @@ attempts=0
 while :; do
     attempts=$((attempts + 1))
 
-    # Idempotent.
-    php "$NC_ROOT/occ" app:install notify_push >/dev/null 2>&1 || true
-    php "$NC_ROOT/occ" app:enable  notify_push >/dev/null 2>&1 || true
+    # Idempotent. Failures are non-fatal (the loop retries), but their output
+    # is LOGGED: app:install fetches from the Nextcloud app store, and a
+    # download/rate-limit/compat error that was silently discarded here left
+    # CI runs failing "notify_push app not enabled" with no explanation
+    # (run 475, 2026-09-16). The expected "already installed" non-zero exit
+    # on attempts 2..6 (and every reboot) is filtered so the log stays quiet.
+    if ! out=$(php "$NC_ROOT/occ" app:install notify_push 2>&1); then
+        case "$out" in
+            *"already installed"*) ;;
+            *) log "app:install notify_push failed (attempt $attempts): $out" ;;
+        esac
+    fi
+    if ! out=$(php "$NC_ROOT/occ" app:enable notify_push 2>&1); then
+        log "app:enable notify_push failed (attempt $attempts): $out"
+    fi
 
     if php "$NC_ROOT/occ" notify_push:setup "$PUSH_LOCAL_URL" 2>&1; then
         log "notify_push:setup succeeded on attempt $attempts"
