@@ -27,17 +27,13 @@
       "groupName": "github-actions"
     },
     {
-      "description": "nginx + supervisor are pinned in the Dockerfile and tracked via the `deb` datasource (markers there). Repology strips the Debian -N+debNNuM revision so it can't see security rebuilds; the deb datasource reads the actual package index. Point it at both trixie (base) and trixie-security so security revisions are picked up — Renovate merges the registries and takes the highest. All apt bumps grouped into one PR.",
-      "matchDatasources": ["deb"],
-      "registryUrls": [
-        "https://deb.debian.org/debian?suite=trixie&components=main&binaryArch=amd64",
-        "https://deb.debian.org/debian-security?suite=trixie-security&components=main&binaryArch=amd64"
-      ],
+      "description": "nginx + supervisor are pinned in the Dockerfile and tracked via the custom `debian-madison` datasource (markers there): Debian QA's madison service (UDD-backed), one text line per suite, restricted to trixie + trixie-updates + trixie-security, i.e. exactly what apt inside the image can install. Why not the obvious choices: Repology strips the Debian -N+debNNuM revision so it can't see security rebuilds; Renovate's built-in `deb` datasource hard-codes Packages.gz but debian-security only publishes Packages.xz (renovatebot/renovate#44330, PR #35865 unmerged), so its trixie-security registry 404s and is skipped at DEBUG level — it never saw deb13u8/u9 and CI was red for a month (2026-09-16 → 2026-10-11). All apt bumps grouped into one PR.",
+      "matchDatasources": ["custom.debian-madison"],
       "groupName": "debian-apt"
     },
     {
-      "description": "Exempt the deb datasource from the global 3-day minimumReleaseAge. Two reasons: the debian-apt group's whole point is picking up trixie-security rebuilds, which must not wait out an age gate (and the vulnerabilityAlerts fast path can't help - that only covers GitHub's advisory DB, which has no deb coverage and is inert on the Forgejo platform anyway; osvVulnerabilityAlerts likewise has no deb coverage); and the deb datasource may not supply releaseTimestamps, which under internalChecksFilter=strict would silently freeze apt bumps forever rather than delay them.",
-      "matchDatasources": ["deb"],
+      "description": "Exempt the Debian apt pins from the global 3-day minimumReleaseAge. Two reasons: the debian-apt group's whole point is picking up trixie-security rebuilds, which must not wait out an age gate (and the vulnerabilityAlerts fast path can't help - that only covers GitHub's advisory DB, which has no deb coverage and is inert on the Forgejo platform anyway; osvVulnerabilityAlerts likewise has no deb coverage); and madison supplies no releaseTimestamps, which under internalChecksFilter=strict would silently freeze apt bumps forever rather than delay them.",
+      "matchDatasources": ["custom.debian-madison"],
       "minimumReleaseAge": null
     },
     {
@@ -58,5 +54,15 @@
       "matchUpdateTypes": ["pin", "patch", "minor"],
       "enabled": false
     }
-  ]
+  ],
+  "customDatasources": {
+    "debian-madison": {
+      "description": "Debian QA madison (UDD-backed): one `pkg | version | suite | archs` text line per suite. Only sees what apt in the trixie image can install (trixie, trixie-updates, trixie-security). Replaces the built-in deb datasource, which cannot read debian-security (Packages.xz only).",
+      "defaultRegistryUrlTemplate": "https://qa.debian.org/madison.php?package={{packageName}}&text=on&s=trixie,trixie-updates,trixie-security",
+      "format": "plain",
+      "transformTemplates": [
+        "{ \"releases\": [ $distinct(releases[version != \"\"].$trim($split(version, \"|\")[1])).{ \"version\": $ } ] }"
+      ]
+    }
+  }
 }
