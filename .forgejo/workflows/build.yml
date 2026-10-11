@@ -566,7 +566,13 @@ jobs:
         uses: https://forgejo.informethic.ch/forgejo/upload-artifact@v5
         with:
           name: junit-${{ matrix.build.major }}-${{ matrix.scenario.id }}
-          path: tests/reports/*.xml
+          # *.log = `docker compose logs` of the fixture, written by
+          # run-all.sh's EXIT trap. Without it a runtime failure whose cause
+          # only reaches the container's stderr (e.g. the notify_push
+          # app-store install in runs 475/604/609) is undiagnosable from CI.
+          path: |
+            tests/reports/*.xml
+            tests/reports/*.log
 
       - name: Surface bats failures in run summary
         if: always() && matrix.build.version != 'none'

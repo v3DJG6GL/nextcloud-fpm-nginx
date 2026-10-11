@@ -108,7 +108,10 @@ echo "── Bringing up fixture ───────────────�
 cleanup() {
     echo
     echo "── Tearing down fixture ──────────────────────────────────────────"
-    docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" logs --tail=200 \
+    # Uploaded as a CI artifact next to the JUnit XML (build.yml). 200 lines
+    # was too little: the suite restarts the container several times and the
+    # first-boot output (notify-push-wrapper, entrypoint) scrolled out.
+    docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" logs --tail=3000 --timestamps \
         > "tests/reports/${COMPOSE_PROJECT_NAME}.log" 2>&1 || true
     docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" \
         down -v --remove-orphans >/dev/null 2>&1 || true
