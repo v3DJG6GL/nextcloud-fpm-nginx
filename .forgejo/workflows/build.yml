@@ -41,6 +41,19 @@
 #     manifest entries that Forgejo's registry has historically not
 #     accepted/displayed cleanly. Re-enable and test if desired.
 #   * permissions:, checks: — GitHub token-permission model; dropped.
+#   * Test image built ONCE per major (build-test-image job) and pushed as
+#     a throw-away `ci-<major>-run<run_id>` tag; the 15 scenario cells of a
+#     major `docker pull` it. Before (through 2026-10-11) every cell ran its
+#     own buildx builder + `load: true` into the shared dind daemon: 30
+#     builders, 30 image loads and 30 leaked builder state volumes per
+#     run. Five full-matrix runs in one evening filled the dind dataset's
+#     ZFS quota (`disk quota exceeded`, runs 604–611; same failure as run
+#     76 in July). The host's 3-hourly dind reset cannot fire while cells
+#     are active, so the load has to come down at the source. all-ci
+#     deletes the ci-* tags afterwards.
+#   * timeout-minutes on every matrix job: near quota, `docker load`/pull
+#     wedges silently and a cell otherwise sits there until Forgejo's 3h
+#     default job timeout — blocking the dind reset the whole time.
 #   * No-op gate runs (cron with nothing to rebuild) emit a sentinel matrix
 #     row (version 'none') instead of an empty list + job-level skip: on
 #     Forgejo v15 a skipped job permanently blocks every job that `needs:`
@@ -381,20 +394,108 @@ jobs:
           echo "builds=$builds" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
 
-  # ─── amd64 test (Pattern A: build → load → test → only-then-push) ───
+  # ─── amd64 test image: build ONCE per major, push a throw-away CI tag ───
+  # One buildx builder and one image per major instead of one per scenario
+  # cell (see the header comment on dind quota). The tag is unique per run
+  # (run_id, not sha: a push run and a PR run of the same commit would
+  # otherwise push the same tag concurrently, which Forgejo's registry
+  # answers with 500s). all-ci deletes the tag when the run is over.
+  build-test-image:
+    name: Build test image — ${{ matrix.build.major }}
+    needs: compute-matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJson(needs.compute-matrix.outputs.builds) }}
+    steps:
+      - name: Derive registry refs (host + lowercase owner)
+        if: matrix.build.version != 'none'
+        run: |
+          echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+          echo "OWNER_LC=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        if: matrix.build.version != 'none'
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        if: matrix.build.version != 'none'
+        uses: docker/setup-buildx-action@v4
+        with:
+          # Resolve docker.io refs via Google's pull-through mirror: the
+          # runner has a single egress IP and Docker Hub's anonymous rate
+          # limit (429s, observed run 16 and earlier) is shared by every
+          # job. The GitHub original had the same protection via
+          # buildkitd-mirror.toml; this is the inline equivalent. buildkit
+          # falls back to docker.io on a mirror miss/outage.
+          #
+          # network=host puts the builder in the dind daemon's netns (same as
+          # the job containers, per runner-config container.network). Without
+          # it the builder sits on a dind bridge whose DNS falls back to
+          # 8.8.8.8, resolves the instance's public WAN IP, and hairpins all
+          # registry traffic (cache-from/push) through the LAN firewall. In
+          # the dind netns it resolves via the outer embedded DNS, which
+          # answers with the reverse proxy's container alias directly.
+          driver-opts: network=host
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to the Forgejo registry
+        if: matrix.build.version != 'none'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Build amd64 test image (push CI tag)
+        if: matrix.build.version != 'none'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          # Force-pull the base manifest so we test the SAME
+          # nextcloud:<ver>-fpm the publish build ships. Without this, a
+          # digest-drift rebuild resolves the base from dind's local cache
+          # and would validate the OLD base while publish pulls the NEW one.
+          pull: true
+          # Match the publish build: when the staleness gate sets no_cache,
+          # test the freshly-resolved apt layers that will actually ship.
+          no-cache: ${{ matrix.build.no_cache }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:ci-${{ matrix.build.major }}-run${{ github.run_id }}
+          build-args: |
+            NC_VERSION=${{ matrix.build.version }}
+          provenance: false
+          sbom: false
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
+          # Exactly one job per major exists now, so the cache export no
+          # longer races on the tag. ignore-error keeps a transient registry
+          # 500 on the export from failing the build: worst case the cache
+          # is one run stale (fail-open).
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }},mode=max,ignore-error=true
+
+  # ─── amd64 test (pull the per-major CI image → test → only-then-push) ───
   # For each <major> × <scenario> cell:
-  #   1. Build amd64 into the shared dind daemon (load: true).
+  #   1. Pull the CI image build-test-image pushed for this run.
   #   2. Run container-structure-test against the static image.
   #   3. Boot a docker compose fixture + run bats runtime tests.
   # The `build` job below blocks on this passing.
   test:
     name: Test (amd64) — ${{ matrix.build.major }} / ${{ matrix.scenario.id }}
-    needs: compute-matrix
+    needs: [compute-matrix, build-test-image]
     # No job-level skip when the gate filters every major: on Forgejo v15 a
     # skipped job permanently blocks everything that `needs:` it (see the
     # sentinel comment in compute-matrix). Instead the job always runs and
     # each STEP guards on the sentinel — a no-op cell completes in seconds.
     runs-on: ubuntu-latest
+    # A wedged pull or compose boot must not hold a dind slot (and block the
+    # host's dind reset) for Forgejo's 3h default. A healthy cell takes
+    # 10–20 min including the fixture boot.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -420,11 +521,19 @@ jobs:
         # runner's `capacity` — consider trimming the scenario list for
         # push/PR events if wall-clock time becomes a problem.
     steps:
-      - name: Derive registry refs (host + lowercase owner)
+      - name: Derive registry refs (host + lowercase owner) and the CI image ref
         if: matrix.build.version != 'none'
+        env:
+          MAJOR: ${{ matrix.build.major }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
-          echo "OWNER_LC=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+          registry="${GITHUB_SERVER_URL#*://}"
+          owner_lc=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')
+          echo "REGISTRY=${registry}" >> "$GITHUB_ENV"
+          echo "OWNER_LC=${owner_lc}" >> "$GITHUB_ENV"
+          # Must match the tag build-test-image pushes (job-level env can't
+          # see GITHUB_ENV values, hence derived here).
+          echo "CI_IMAGE=${registry}/${owner_lc}/${IMAGE}:ci-${MAJOR}-run${RUN_ID}" >> "$GITHUB_ENV"
 
       - name: Checkout
         if: matrix.build.version != 'none'
@@ -438,33 +547,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends php-cli
 
-      - name: Set up Buildx
-        if: matrix.build.version != 'none'
-        uses: docker/setup-buildx-action@v4
-        with:
-          # Resolve docker.io refs via Google's pull-through mirror. All
-          # matrix cells share the runner's single egress IP, and 30 cells
-          # each doing a `pull: true` manifest resolution of the nextcloud
-          # base blows through Docker Hub's anonymous rate limit (429s,
-          # observed run 16 and earlier) within seconds. The GitHub original
-          # had the same protection via buildkitd-mirror.toml; this is the
-          # inline equivalent. buildkit falls back to docker.io on a mirror
-          # miss/outage, so this can only help.
-          #
-          # network=host puts the builder in the dind daemon's netns (same as
-          # the job containers, per runner-config container.network). Without
-          # it the builder sits on a dind bridge whose DNS falls back to
-          # 8.8.8.8, resolves the instance's public WAN IP, and hairpins all
-          # registry traffic (cache-from/push) through the LAN firewall. In
-          # the dind netns it resolves via the outer embedded DNS, which
-          # answers with the reverse proxy's container alias directly.
-          driver-opts: network=host
-          buildkitd-config-inline: |
-            [registry."docker.io"]
-              mirrors = ["mirror.gcr.io"]
-
-      # Registry login needed here (not just in publish) because the buildx
-      # cache now lives on the Forgejo registry (cache-to below).
+      # The CI image lives on the Forgejo registry (private package), so the
+      # job's docker CLI needs the credential: the daemon is the remote dind,
+      # the CLI forwards the login from its own config with the pull request.
       - name: Log in to the Forgejo registry
         if: matrix.build.version != 'none'
         uses: docker/login-action@v4
@@ -473,37 +558,26 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_TOKEN }}
 
-      - name: Build amd64 image (load into dind — Pattern A)
+      - name: Pull the per-major CI image
         if: matrix.build.version != 'none'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          load: true
-          # Force-pull the base manifest so we test the SAME
-          # nextcloud:<ver>-fpm the publish build ships. Without this, a
-          # digest-drift rebuild resolves the base from dind's local cache
-          # and would validate the OLD base while publish pulls the NEW one.
-          pull: true
-          # Match the publish build: when the staleness gate sets no_cache,
-          # test the freshly-resolved apt layers that will actually ship.
-          no-cache: ${{ matrix.build.no_cache }}
-          tags: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
-          build-args: |
-            NC_VERSION=${{ matrix.build.version }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
-          # Exactly ONE cell per major exports the cache (every cell imports).
-          # All 15 scenario cells build the identical image, and 15 concurrent
-          # cache pushes to the same tag race in Forgejo's package DB — the
-          # registry 500s on concurrent manifest PUTs of one tag, failing the
-          # whole build step. ignore-error tolerates a transient 500 on the
-          # one export too: worst case the cache is one run stale (fail-open).
-          cache-to: ${{ matrix.scenario.id == 'sqlite-noredis-cron-none' && format('type=registry,ref={0}/{1}/{2}:buildcache-{3},mode=max,ignore-error=true', env.REGISTRY, env.OWNER_LC, env.IMAGE, matrix.build.major) || '' }}
+        run: |
+          set -euo pipefail
+          # Retry: 15 cells pull the same tag the moment build-test-image
+          # finishes; the registry occasionally 500s under that burst. The
+          # dind daemon dedups the layers, so only the first pull per major
+          # actually transfers anything.
+          for attempt in 1 2 3 4; do
+            docker pull "$CI_IMAGE" && exit 0
+            echo "pull attempt $attempt failed — retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not pull $CI_IMAGE"
+          exit 1
 
       - name: container-structure-test (image-static assertions)
         if: matrix.build.version != 'none'
         env:
-          IMG: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
+          IMG: ${{ env.CI_IMAGE }}
           # Fetched from this instance's `tools` generic package registry —
           # upload the new release binary there BEFORE bumping this version.
           CST_VERSION: v1.22.1
@@ -543,7 +617,7 @@ jobs:
       - name: Run bats suite (runtime assertions)
         if: matrix.build.version != 'none'
         env:
-          NC_IMAGE: nextcloud-fpm-nginx:test-${{ matrix.build.major }}
+          NC_IMAGE: ${{ env.CI_IMAGE }}
           NC_MAJOR: ${{ matrix.build.major }}
           SCENARIO_DB: ${{ matrix.scenario.db }}
           SCENARIO_REDIS: ${{ matrix.scenario.redis }}
@@ -590,10 +664,34 @@ jobs:
   # contexts. `all-ci` is the stable gate.
   all-ci:
     name: all-ci
-    needs: [compute-matrix, test]
+    needs: [compute-matrix, build-test-image, test]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Delete this run's throw-away ci-* image tags
+        # Best effort: a leftover tag costs registry space, not correctness.
+        # Package API, not the registry API: Forgejo exposes tag deletion as
+        # DELETE /api/v1/packages/{owner}/container/{name}/{tag}. 404 = the
+        # sentinel run never pushed one (or the build failed before the
+        # push); anything else is logged and ignored.
+        continue-on-error: true
+        env:
+          BUILDS: ${{ needs.compute-matrix.outputs.builds }}
+          REG_USER: ${{ secrets.REGISTRY_USER }}
+          REG_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          owner_lc=$(printf '%s' "${GITHUB_REPOSITORY%%/*}" | tr '[:upper:]' '[:lower:]')
+          for major in $(jq -r '.[].major' <<<"$BUILDS"); do
+            [ "$major" != none ] || continue
+            tag="ci-${major}-run${RUN_ID}"
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+              -u "${REG_USER}:${REG_TOKEN}" \
+              "${GITHUB_SERVER_URL}/api/v1/packages/${owner_lc}/container/${IMAGE}/${tag}")
+            echo "delete ${IMAGE}:${tag} → HTTP ${code}"
+          done
+
       - name: Verify all required jobs succeeded
         run: |
           set -euo pipefail
@@ -605,16 +703,22 @@ jobs:
             echo "::error::compute-matrix=${{ needs.compute-matrix.result }}"
             exit 1
           fi
-          case "${{ needs.test.result }}" in
-            success|skipped) ;;
-            *)
-              echo "::error::test=${{ needs.test.result }}"
-              exit 1
-              ;;
-          esac
+          for job in build-test-image test; do
+            case "$job" in
+              build-test-image) result="${{ needs.build-test-image.result }}" ;;
+              test)             result="${{ needs.test.result }}" ;;
+            esac
+            case "$result" in
+              success|skipped) ;;
+              *)
+                echo "::error::${job}=${result}"
+                exit 1
+                ;;
+            esac
+          done
 
   # ─── Build + push (only after tests pass) ───
-  # Reuses the registry buildx cache populated by the test jobs, so the
+  # Reuses the registry buildx cache populated by build-test-image, so the
   # build here is mostly cache hits — the manifest push is the real work.
   build:
     name: Build & push — v${{ matrix.build.version }}
@@ -626,6 +730,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: [compute-matrix, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -729,8 +834,8 @@ jobs:
           # verified your instance handles them.
           provenance: false
           sbom: false
-          # Read the cache the test job populated. No cache-to here: the
-          # test job already exports mode=max to the same ref, so a second
+          # Read the cache build-test-image populated. No cache-to here:
+          # that job already exports mode=max to the same ref, so a second
           # export would never be consumed.
           cache-from: |
             type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}

@@ -65,9 +65,12 @@ Notes:
 ## CI
 
 Every push runs the full cartesian matrix (`KEEP_LATEST_MAJORS` majors ×
-15 scenarios — default 2 → 30 cells) on `ubuntu-latest` + smoke (CST +
-container start) on `ubuntu-24.04-arm` (one cell per major). The `build` job
-waits on both test jobs — failed tests block the publish to the registry.
+15 scenarios — default 2 → 30 cells) on `ubuntu-latest`. The image under
+test is built once per major (`build-test-image`) and pushed to the
+registry as a throw-away `ci-<major>-run<run_id>` tag that every scenario
+cell pulls; `all-ci` deletes those tags at the end of the run. The `build`
+job waits on the test matrix — failed tests block the publish to the
+registry.
 
 JUnit XML is uploaded as a workflow artifact and surfaced inline on PRs
 via `mikepenz/action-junit-report`.
