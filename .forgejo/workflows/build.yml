@@ -452,7 +452,10 @@ jobs:
           password: ${{ secrets.REGISTRY_TOKEN }}
 
       - name: Build amd64 test image (push CI tag)
+        id: build
         if: matrix.build.version != 'none'
+        # The retry step below decides the job's outcome.
+        continue-on-error: true
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -476,6 +479,35 @@ jobs:
           # longer races on the tag. ignore-error keeps a transient registry
           # 500 on the export from failing the build: worst case the cache
           # is one run stale (fail-open).
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }},mode=max,ignore-error=true
+
+      # Retry once: the image push and the cache export run in parallel, and
+      # both majors' jobs push at the same time — a layer that is new and
+      # identical across majors gets uploaded by up to four writers at
+      # once, which Forgejo's registry intermittently answers with
+      # `failed to push …: unknown` (run 727, PR #28: both majors). The
+      # pause lets the other major's push finish; the rebuild comes from
+      # the builder's local cache and the blobs already exist, so the
+      # second push only has to land the manifest.
+      - name: Wait before retrying the push
+        if: matrix.build.version != 'none' && steps.build.outcome == 'failure'
+        run: sleep 30
+
+      - name: Build amd64 test image (push CI tag) — retry
+        if: matrix.build.version != 'none' && steps.build.outcome == 'failure'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          pull: true
+          no-cache: ${{ matrix.build.no_cache }}
+          tags: ${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:ci-${{ matrix.build.major }}-run${{ github.run_id }}
+          build-args: |
+            NC_VERSION=${{ matrix.build.version }}
+          provenance: false
+          sbom: false
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.OWNER_LC }}/${{ env.IMAGE }}:buildcache-${{ matrix.build.major }},mode=max,ignore-error=true
 
   # ─── amd64 test (pull the per-major CI image → test → only-then-push) ───
