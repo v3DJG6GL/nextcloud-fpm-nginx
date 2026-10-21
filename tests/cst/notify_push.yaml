@@ -15,9 +15,27 @@ commandTests:
     args: ['-E', '^\s*/usr/local/bin/notify_push ', '/usr/local/bin/notify-push-wrapper.sh']
     exitCode: 0
 
-  - name: wrapper uses occ for app:install + setup
+  - name: wrapper syncs the bundled app + runs occ setup
     command: sh
     args:
       - '-c'
-      - 'grep -E "app:install notify_push|notify_push:setup" /usr/local/bin/notify-push-wrapper.sh'
+      - 'grep -q "BUNDLED_APP=/usr/src/notify_push" /usr/local/bin/notify-push-wrapper.sh && grep -q "notify_push:setup" /usr/local/bin/notify-push-wrapper.sh'
+    exitCode: 0
+
+  # Regression guard (runs 744/747): fetching the app from apps.nextcloud.com
+  # in every test cell got the runner's egress IP 429-rate-limited.
+  - name: wrapper never installs from the app store
+    command: sh
+    args: ['-c', '! grep -qE "^[^#]*occ\" app:(install|update)" /usr/local/bin/notify-push-wrapper.sh']
+    exitCode: 0
+
+  # Same version as the binary (one tarball, hard-linked) — checked against
+  # NOTIFY_PUSH_VERSION at build time; shape-only here.
+  - name: bundled notify_push app present with a version
+    command: grep
+    args: ['-E', '<version>[0-9]+\.[0-9]+\.[0-9]+</version>', '/usr/src/notify_push/appinfo/info.xml']
+    exitCode: 0
+  - name: bundled app signature present (app integrity check)
+    command: test
+    args: ['-s', '/usr/src/notify_push/appinfo/signature.json']
     exitCode: 0

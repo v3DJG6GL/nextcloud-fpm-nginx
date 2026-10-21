@@ -58,10 +58,10 @@ setup() {
 
 @test "notify_push app installed + enabled in Nextcloud" {
     nc_app_enabled notify_push || {
-        # The wrapper retries app:install/app:enable 6x and then falls back
-        # to writing base_endpoint directly, so the preceding test can pass
-        # while the app is still missing. The install error (app store /
-        # github.com download, rate limit, compat) only ever reaches the
+        # The wrapper retries app:enable 6x and then falls back to writing
+        # base_endpoint directly, so the preceding test can pass while the
+        # app is still missing. The sync/enable error (copy of the bundled
+        # app, compat, occ upgrade) only ever reaches the
         # container's stderr — surface it here, or the failure is
         # undiagnosable from the CI job log (runs 475 and 604).
         log "notify_push not enabled; wrapper log lines from the nc container:"

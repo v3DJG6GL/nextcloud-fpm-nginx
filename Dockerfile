@@ -89,10 +89,21 @@ RUN set -eux; \
     sed -i -E '/^\s*access\.log\s*=/d' "$f"; \
     ! grep -qE '^\s*access\.log\s*=' /usr/local/etc/php-fpm.d/*.conf
 
-# Install the Nextcloud notify_push binary (companion to the upstream
-# `notify_push` PHP app that ships in the official image). Disabled by default;
-# opt in via NOTIFY_PUSH_ENABLE=true env var (see scripts/render-overrides.sh).
-# renovate: datasource=github-releases depName=nextcloud/notify_push extractVersion=^v(?<version>.+)$
+# Bundle the notify_push PHP app + binary. Disabled by default; opt in via
+# NOTIFY_PUSH_ENABLE=true env var (see scripts/render-overrides.sh).
+#
+# The official image does NOT ship the app. It used to be `occ app:install`ed
+# from apps.nextcloud.com by the wrapper on every fresh volume — 12× per CI
+# run (one per notify test cell, ×6 retries ×2 occ calls when failing), which
+# got the runner's shared egress IP 429-rate-limited by the app store
+# (runs 744/747, 2026-10-21; NC reports a 429 as "not found on the appstore").
+# Instead, fetch the signed release tarball once at build time — the same
+# file the app store links to — into /usr/src/notify_push; the wrapper syncs
+# it into custom_apps/ at boot. The tarball carries the per-arch binaries
+# too (bin/<arch>/notify_push, identical to the standalone release assets),
+# so /usr/local/bin/notify_push is a hard link into it: one download, and the
+# app and binary versions can never drift apart.
+# renovate: datasource=github-releases depName=nextcloud-releases/notify_push extractVersion=^v(?<version>.+)$
 ARG NOTIFY_PUSH_VERSION=1.4.1
 RUN set -eux; \
     case "$(uname -m)" in \
@@ -100,9 +111,15 @@ RUN set -eux; \
         aarch64) rust_arch=aarch64 ;; \
         *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL --retry 3 --retry-delay 5 --retry-connrefused --retry-all-errors -o /usr/local/bin/notify_push \
-        "https://github.com/nextcloud/notify_push/releases/download/v${NOTIFY_PUSH_VERSION}/notify_push-${rust_arch}-unknown-linux-musl"; \
-    chmod 0755 /usr/local/bin/notify_push; \
+    curl -fsSL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o /tmp/notify_push.tar.gz \
+        "https://github.com/nextcloud-releases/notify_push/releases/download/v${NOTIFY_PUSH_VERSION}/notify_push-v${NOTIFY_PUSH_VERSION}.tar.gz"; \
+    tar -xzf /tmp/notify_push.tar.gz -C /usr/src --no-same-owner; \
+    rm /tmp/notify_push.tar.gz; \
+    chmod -R go-w /usr/src/notify_push; \
+    grep -qF "<version>${NOTIFY_PUSH_VERSION}</version>" /usr/src/notify_push/appinfo/info.xml \
+        || { echo "notify_push app version mismatch in appinfo/info.xml, want ${NOTIFY_PUSH_VERSION}" >&2; exit 1; }; \
+    chmod 0755 "/usr/src/notify_push/bin/${rust_arch}/notify_push"; \
+    ln "/usr/src/notify_push/bin/${rust_arch}/notify_push" /usr/local/bin/notify_push; \
     # Single source of truth: fail the build if the downloaded binary does not
     # report the pinned NOTIFY_PUSH_VERSION (wrong/empty/redirected download).
     # Downstream tests only assert the version *shape*, so a bump touches this

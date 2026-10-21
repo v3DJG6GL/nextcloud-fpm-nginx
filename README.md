@@ -299,8 +299,12 @@ making desktop/mobile sync feel instant.
 
 Set `NOTIFY_PUSH_ENABLE=true` in your compose env. On first start the wrapper:
 
-1. Installs the `notify_push` Nextcloud app from the app store (it's not
-   bundled in NC 33 — must come from `apps.nextcloud.com`).
+1. Installs the `notify_push` Nextcloud app into `custom_apps/`. The official
+   image doesn't ship it; this image bundles the signed release tarball at
+   `/usr/src/notify_push`, at the same version as the binary, so nothing is
+   fetched from `apps.nextcloud.com`. When a newer image bundles a newer app,
+   the wrapper syncs it and runs `occ upgrade`; a newer copy you installed
+   yourself (e.g. via the app store UI) is left alone.
 2. Starts the `notify_push` binary as a third supervisord program (running as
    `www-data`, listening on `127.0.0.1:7867`).
 3. Registers the binary URL inside Nextcloud's config (`config:app:set
