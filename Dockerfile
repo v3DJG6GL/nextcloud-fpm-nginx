@@ -31,7 +31,7 @@ USER root
 # before the Renovate PR merges. Transitive deps (libssl etc.) are refreshed by
 # the staleness branch of the daily compute-matrix gate.
 # renovate: datasource=custom.debian-madison depName=nginx versioning=deb
-ARG NGINX_VERSION=1.26.3-3+deb13u9
+ARG NGINX_VERSION=1.26.3-3+deb13u10
 # renovate: datasource=custom.debian-madison depName=supervisor versioning=deb
 ARG SUPERVISOR_VERSION=4.2.5-3
 
