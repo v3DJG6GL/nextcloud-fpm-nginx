@@ -104,7 +104,7 @@ RUN set -eux; \
 # so /usr/local/bin/notify_push is a hard link into it: one download, and the
 # app and binary versions can never drift apart.
 # renovate: datasource=github-releases depName=nextcloud-releases/notify_push extractVersion=^v(?<version>.+)$
-ARG NOTIFY_PUSH_VERSION=1.4.1
+ARG NOTIFY_PUSH_VERSION=1.4.2
 RUN set -eux; \
     case "$(uname -m)" in \
         x86_64)  rust_arch=x86_64 ;; \
